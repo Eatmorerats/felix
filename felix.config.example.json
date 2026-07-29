@@ -1,0 +1,117 @@
+{
+  "$comment": "Per-repo Felix config. Place as felix.config.json at the TARGET repo root. This example is for a Node/TS repo. Felix is repo-agnostic: the commands below teach it how to install/test/boot THIS repo. {file} is substituted with a test file path relative to the repo root.",
+
+  "language": "node",
+  "workdir": ".",
+
+  "skipGlobs": [
+    "**/*.md",
+    "docs/**",
+    "**/*.txt",
+    "**/*.json",
+    ".github/**",
+    "**/*.lock",
+    "**/*.svg",
+    "**/*.png"
+  ],
+
+  "commands": {
+    "install": "npm ci || npm install",
+    "preTest": "",
+    "test": "npm test",
+    "testOne": "npx vitest run {file} || npx jest {file}",
+    "smoke": "npm run build --if-present && node -e \"require('./dist/start.js')\"",
+    "lint": "npm run lint --if-present",
+    "typecheck": "npx tsc --noEmit"
+  },
+
+  "test": {
+    "filePattern": "**/*.{test,spec}.{js,ts,jsx,tsx}",
+    "framework": "vitest"
+  },
+
+  "smoke": {
+    "expect": "",
+    "timeoutMs": 60000
+  },
+
+  "drive": {
+    "$comment": "R1 (opt-in): after build+test, BOOT the app and probe it, catching failures that only surface at RUNTIME — a route that 404/500s, or a page that answers 200 but renders a blank screen. Default enabled=false, so non-web repos are untouched. Auto-detect pre-fills startCommand for vite/next apps; flip enabled=true and list your routes. The HTTP probe below is dependency-free (Node fetch); the pageLoad block is the deeper browser render.",
+    "enabled": false,
+    "startCommand": "npm run preview -- --port 4173",
+    "url": "http://127.0.0.1",
+    "port": 4173,
+    "routes": ["/", "/login"],
+    "readyTimeoutMs": 60000,
+    "probeTimeoutMs": 10000,
+    "expectStatusBelow": 400,
+    "pageLoad": {
+      "$comment": "Headless render check — catches the '200 but blank screen' class the HTTP probe can't. Needs Playwright in felix/ (`npm i -D playwright && npx playwright install chromium`); if it's absent this SKIPS softly and never flips a verdict. failOnPageError gates on uncaught exceptions (the usual blank-screen cause). Console errors are captured + reported but only gate when failOnConsoleError=true (they're noisy). minBodyChars is the blank-screen floor: fail if <body> renders fewer trimmed chars (set 0 to disable for canvas/image-only apps). requireSelector is an optional stronger assertion (e.g. '#root .app').",
+      "enabled": false,
+      "waitUntil": "load",
+      "settleMs": 400,
+      "minBodyChars": 1,
+      "requireSelector": "",
+      "failOnPageError": true,
+      "failOnConsoleError": false,
+      "navTimeoutMs": 20000
+    },
+    "flowOpts": {
+      "$comment": "Budgets for the R1(B) interaction flows below. stepTimeoutMs bounds one action (waiting for a selector, a click, a nav); flowTimeoutMs bounds a whole flow so one wedged flow can't eat the CI job; settleMs is the pause after an interacting step so the DOM can react before the next assertion looks at it. failOnPageError makes an uncaught exception mid-flow a hard fail.",
+      "stepTimeoutMs": 8000,
+      "flowTimeoutMs": 60000,
+      "settleMs": 250,
+      "failOnPageError": true
+    },
+    "flows": [
+      {
+        "$comment": "R1(B) (opt-in): a page that LOADS is not a page that WORKS. 'the button does nothing', 'the form submits and nothing happens', 'login accepts a wrong password' pass both the HTTP probe and the headless render — and they're usually exactly what the PR claims. A flow clicks and asserts like a user; a failed flow is a HARD Tier 1 check. Verbs: goto click fill select press waitFor waitMs expectText expectNoText expectSelector expectNoSelector expectUrl. SAFETY (this file is attacker-controlled — whoever opens the PR writes it): steps are data not code (no eval/evaluate passthrough); goto takes a same-origin PATH only, never an absolute URL; valueEnv may ONLY name FELIX_FLOW_* vars so a PR can't type a real secret into a page it controls; typed values are redacted from every report ('fill #password ***'); a malformed flow is a hard FAIL, not a silent skip. Delete this array (or leave it empty) to run no flows.",
+        "name": "login rejects a bad password",
+        "path": "/login",
+        "steps": [
+          { "fill": "#email", "value": "test@example.com" },
+          { "fill": "#password", "valueEnv": "FELIX_FLOW_BAD_PASSWORD" },
+          { "click": "button[type=submit]" },
+          { "expectText": "Invalid credentials" },
+          { "expectNoText": "Welcome back" }
+        ]
+      }
+    ]
+  },
+
+  "secrets": {
+    "$comment": "Felix's built-in scan is a CHANGED-FILES BACKSTOP, not an authoritative repo scanner. For security-sensitive repos, set externalScan to a real scanner run as the HARD gate — Felix then demotes its own scan to advisory and defers. Use gitleaks (offline, no network) or trufflehog WITH verification OFF (never on — live verification fires network requests using attacker-controlled PR content: SSRF/egress risk on untrusted diffs). Empty = the built-in scan gates.",
+    "allowFiles": ["**/*.fixture.*", "**/fixtures/**", "**/__mocks__/**"],
+    "sinRequiresKeyword": true,
+    "externalScan": ""
+  },
+
+  "judge": {
+    "$comment": "Tier 3 cross-family LLM judge. adversarial=true uses a refute-first prompt — the judge must state the strongest reason each criterion is NOT met before deciding, which cuts over-eager 'met' verdicts. Off by default; FELIX_JUDGE_ADVERSARIAL=true is the global/Action equivalent.",
+    "adversarial": false
+  },
+
+  "timeouts": {
+    "installMs": 300000,
+    "testMs": 600000,
+    "testOneMs": 180000
+  },
+
+  "gating": {
+    "$comment": "Make Felix authoritative. enabled=false (default) is advisory. When enabled, the verdicts in blockOn make the 'Felix verdict' check fail (gateable by marking it Required in branch protection); a PR carrying overrideLabel bypasses the block.",
+    "enabled": false,
+    "blockOn": ["NOT VERIFIED"],
+    "overrideLabel": "felix-override"
+  },
+
+  "isolation": {
+    "$comment": "Phase 2 sandbox jail. mode 'none' (default) runs commands on the host with a clean env + timeout. mode 'docker' runs each Tier 1 step in a locked-down container: no network (except install), memory/CPU/pid caps, non-root, read-only root FS, all caps dropped. image defaults per detected language when omitted.",
+    "mode": "none",
+    "image": "node:20",
+    "network": "deny",
+    "memory": "2g",
+    "cpus": "2",
+    "pidsLimit": 512,
+    "tmpfsSize": "512m"
+  }
+}

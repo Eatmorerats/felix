@@ -1,0 +1,38 @@
+{
+  "name": "felix",
+  "version": "1.0.0",
+  "description": "Felix — repo-agnostic behavioral PR-verification engine. Builds, runs, and verifies PRs against a human-authored spec. Usable in any repo as a composite GitHub Action.",
+  "main": "src/engine/index.js",
+  "bin": {
+    "felix": "bin/felix.js"
+  },
+  "scripts": {
+    "felix": "node bin/felix.js",
+    "test": "node test/run.js",
+    "calibrate": "node test/calibrate.js",
+    "test:live": "node test/live-flows.js"
+  },
+  "keywords": [
+    "pr-verification",
+    "code-review",
+    "ci",
+    "behavioral-testing",
+    "github-action"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Eatmorerats/felix.git"
+  },
+  "homepage": "https://github.com/Eatmorerats/felix#readme",
+  "bugs": {
+    "url": "https://github.com/Eatmorerats/felix/issues"
+  },
+  "author": "Eatmorerats",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.99.1",
+    "dotenv": "^17.3.1",
+    "picomatch": "^4.0.2"
+  }
+}

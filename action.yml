@@ -1,0 +1,80 @@
+name: 'Felix PR Verification'
+description: 'Build, run, and behaviorally verify a pull request against its human-authored spec (parallel to CodeRabbit).'
+author: 'Felix'
+branding:
+  icon: 'check-circle'
+  color: 'blue'
+
+inputs:
+  judge-family:
+    description: 'Cross-family judge vendor: "openai" (default) or "gemini". Set the matching key below.'
+    required: false
+    default: 'openai'
+  openai-api-key:
+    description: 'OpenAI API key — required when judge-family is "openai" (the default).'
+    required: false
+    default: ''
+  gemini-api-key:
+    description: 'Google Gemini API key — required when judge-family is "gemini". A different vendor is a stronger cross-family second opinion, and cheaper per PR.'
+    required: false
+    default: ''
+  github-token:
+    description: 'Token used to read the PR and post the verdict comment + check run.'
+    required: false
+    default: ${{ github.token }}
+  judge-model:
+    description: 'Override the judge model (must NOT be an Anthropic model). Blank = the family default (gpt-4.1 / gemini-3.6-flash).'
+    required: false
+    default: ''
+  supabase-url:
+    description: 'Optional Supabase URL for the verdict/calibration log.'
+    required: false
+    default: ''
+  supabase-service-role-key:
+    description: 'Optional Supabase service-role key for the verdict/calibration log.'
+    required: false
+    default: ''
+  repo-path:
+    description: 'Path to the checked-out repo to verify (defaults to the workspace).'
+    required: false
+    default: ${{ github.workspace }}
+  post:
+    description: 'Post/update the verdict comment + check run (true) or dry-run (false).'
+    required: false
+    default: 'true'
+  node-version:
+    description: 'Node version used to run Felix itself.'
+    required: false
+    default: '20'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Node (for Felix)
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install Felix
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: npm ci || npm install
+
+    - name: Run Felix
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        GEMINI_API_KEY: ${{ inputs.gemini-api-key }}
+        FELIX_JUDGE_FAMILY: ${{ inputs.judge-family }}
+        FELIX_JUDGE_MODEL: ${{ inputs.judge-model }}
+        SUPABASE_URL: ${{ inputs.supabase-url }}
+        SUPABASE_SERVICE_ROLE_KEY: ${{ inputs.supabase-service-role-key }}
+        FELIX_DRY_RUN: ${{ inputs.post == 'true' && 'false' || 'true' }}
+        FELIX_POST_COMMENT: ${{ inputs.post }}
+      run: >-
+        node bin/felix.js
+        "${{ github.repository }}#${{ github.event.pull_request.number }}"
+        ${{ inputs.post == 'true' && '--post' || '--dry-run' }}
+        --repo-path "${{ inputs.repo-path }}"

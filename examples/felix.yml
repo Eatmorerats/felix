@@ -1,0 +1,52 @@
+# Felix — drop-in PR verification for ANY repo.
+# Copy this file to .github/workflows/felix.yml in your repository.
+#
+# One-time setup:
+#   1. Add a repository secret for the cross-family judge:
+#        OPENAI_API_KEY (default), or GEMINI_API_KEY if you set judge-family: gemini.
+#   2. (optional) SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY for the verdict log.
+#   3. Add acceptance criteria to your PR descriptions so Felix can verify them.
+#
+# Felix learns your repo automatically (node/python/go/rust) or reads a
+# felix.config.json at your repo root. See:
+# https://github.com/Eatmorerats/felix
+
+name: Felix PR Verification
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+    paths-ignore: ['**/*.md', 'docs/**', '**/*.txt']
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  checks: write
+
+concurrency:
+  group: felix-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  felix:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    # Advisory by default. To enforce: set "gating": { "enabled": true } in
+    # felix.config.json and mark the "Felix verdict" check Required.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: Eatmorerats/felix@main
+        with:
+          # Cross-family judge — keep the default OpenAI, or switch to Gemini (a
+          # different vendor = a stronger second opinion, and cheaper per PR) by
+          # uncommenting the two lines below:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          # judge-family: gemini
+          # gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
+          # Optional verdict/calibration log:
+          supabase-url: ${{ secrets.SUPABASE_URL }}
+          supabase-service-role-key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
