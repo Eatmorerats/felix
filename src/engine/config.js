@@ -34,6 +34,16 @@ const DEFAULT_SECRETS = {
   externalScan: '',
 };
 
+// CRAP (Change Risk Anti-Patterns) — a soft Tier 1 signal that flags changed
+// functions which are both complex and under-tested. OFF by default: enabling it
+// runs the test suite a second time under coverage, so the user opts in explicitly.
+// `threshold` is the CRAP score above which a function is flagged (crap4j uses 30;
+// Uncle Bob drives to <6). Always advisory in v1 — it never gates the verdict.
+const DEFAULT_CRAP = {
+  enabled: false,
+  threshold: 30,
+};
+
 function exists(p) {
   try { return fs.existsSync(p); } catch { return false; }
 }
@@ -212,6 +222,7 @@ function merge(detected, user) {
   out.test = { ...((detected || {}).test || {}), ...((user || {}).test || {}) };
   out.smoke = { ...((detected || {}).smoke || {}), ...((user || {}).smoke || {}) };
   out.secrets = { ...DEFAULT_SECRETS, ...((detected || {}).secrets || {}), ...((user || {}).secrets || {}) };
+  out.crap = { ...DEFAULT_CRAP, ...((detected || {}).crap || {}), ...((user || {}).crap || {}) };
   out.timeouts = { ...DEFAULT_TIMEOUTS, ...((detected || {}).timeouts || {}), ...((user || {}).timeouts || {}) };
   out.isolation = { ...((detected || {}).isolation || {}), ...((user || {}).isolation || {}) };
   // Only materialize `drive` when one side actually has it, so non-web repos stay clean. The
@@ -268,5 +279,5 @@ function loadConfig(repoPath) {
 
 module.exports = {
   loadConfig, detect, merge, validate,
-  DEFAULT_SKIP_GLOBS, DEFAULT_TIMEOUTS, DEFAULT_SECRETS,
+  DEFAULT_SKIP_GLOBS, DEFAULT_TIMEOUTS, DEFAULT_SECRETS, DEFAULT_CRAP,
 };

@@ -18,6 +18,10 @@ const {
   estimateTokens, tokensToChars, splitDiffByFile, packChunks, planJudgeCalls, paceMs,
 } = require('../src/engine/budget');
 const { scanSecrets, shannonEntropy, looksLikeRealSecret } = require('../src/engine/tier1');
+const {
+  parseAddedLines, matchCoverageKey, attributeStatements, functionCoverage, crapScore,
+  methodIsChanged, analyzeFileParsed, coverageAllZero, isLikelyGenerated, buildCrapRow,
+} = require('../src/engine/crap');
 const { parseTarget } = require('../src/engine/github');
 const { render } = require('../src/engine/comment');
 const { triageFiles, triggerGate } = require('../src/engine');
@@ -1436,6 +1440,135 @@ atest('the two-vendor jury still requires unanimity when one seat had to chunk',
 
   assert.strictEqual(out.criteria[0].met, false, 'one dissent must still block');
   assert.match(out.criteria[0].reason, /Split verdict/);
+});
+
+console.log('crap — the fusion math (where a wrong check LIES)');
+test('crapScore: fully covered collapses to raw complexity, exactly', () => {
+  // The boundary criterion 2 depends on: covered==total ⇒ score === comp with no float dust.
+  for (const comp of [1, 5, 7, 12, 30]) {
+    assert.strictEqual(crapScore(comp, 5, 5), comp, `comp ${comp} fully covered → ${comp}`);
+  }
+  assert.strictEqual(crapScore(7, 0, 0), 7, 'zero-statement function ⇒ comp, no divide-by-zero');
+});
+test('crapScore: fully uncovered explodes to comp² + comp', () => {
+  assert.strictEqual(crapScore(7, 0, 9), 56, 'comp 7 uncovered → 49 + 7 = 56');
+  assert.strictEqual(crapScore(5, 0, 3), 30, 'comp 5 uncovered → 25 + 5 = 30 (the boundary)');
+  assert.strictEqual(crapScore(6, 0, 4), 42, 'comp 6 uncovered → 36 + 6 = 42');
+});
+test('crapScore: the comparator is strict > (comp-5-uncovered lands ON 30, not over)', () => {
+  const threshold = 30;
+  assert.strictEqual(crapScore(5, 0, 3) > threshold, false, 'exactly 30 is NOT flagged (strict >)');
+  assert.strictEqual(crapScore(7, 0, 9) > threshold, true, '56 is flagged');
+});
+test('crapScore: partial coverage sits between the extremes', () => {
+  // comp 10, half covered: 100·(0.5)³ + 10 = 12.5 + 10 = 22.5
+  assert.strictEqual(crapScore(10, 5, 10), 22.5);
+});
+test('functionCoverage: a HOT statement counts once, not by hit-count (the count-vs-boolean lie)', () => {
+  // The classic lying bug: summing s[] lets one 5000-hit line mask an uncovered function.
+  const s = { 0: 5000, 1: 0, 2: 0, 3: 0 };
+  const cov = functionCoverage(['0', '1', '2', '3'], s);
+  assert.strictEqual(cov.covered, 1, 'exactly one statement ran');
+  assert.strictEqual(cov.total, 4);
+  // ⇒ frac 0.25, not 0.9998 — the function correctly reads as mostly uncovered.
+  assert.ok(crapScore(8, cov.covered, cov.total) > 30, 'a barely-covered complex fn still flags');
+});
+test('attributeStatements: innermost wins — an uncovered inline callback does NOT drag the outer down', () => {
+  // outer spans 1–8; a nested arrow spans line 3. A statement on line 3 belongs to the
+  // arrow, not outer — so outer stays fully covered even though the callback never ran.
+  const methods = [
+    { name: 'outer', lineStart: 1, lineEnd: 8, cyclomatic: 3 },
+    { name: '<anon method-1>', lineStart: 3, lineEnd: 3, cyclomatic: 1 },
+  ];
+  const statementMap = { 0: { start: { line: 2 } }, 1: { start: { line: 3 } }, 2: { start: { line: 5 } } };
+  const attr = attributeStatements(methods, statementMap);
+  assert.deepStrictEqual(attr.get(0), ['0', '2'], 'outer owns lines 2 and 5, NOT 3');
+  assert.deepStrictEqual(attr.get(1), ['1'], 'the arrow owns line 3');
+});
+test('attributeStatements: an exact-span tie drops the statement (fails toward silence)', () => {
+  const methods = [
+    { name: 'a', lineStart: 1, lineEnd: 3, cyclomatic: 1 },
+    { name: 'b', lineStart: 1, lineEnd: 3, cyclomatic: 1 },
+  ];
+  const attr = attributeStatements(methods, { 0: { start: { line: 2 } } });
+  assert.deepStrictEqual(attr.get(0), [], 'neither method claims the tied statement');
+  assert.deepStrictEqual(attr.get(1), []);
+});
+test('parseAddedLines: only + lines count; deletions do not advance, context does', () => {
+  const patch = [
+    '@@ -10,3 +10,4 @@',
+    ' context',   // line 10
+    '-old removed',
+    '+added A',    // line 11
+    '+added B',    // line 12
+    ' context2',   // line 13
+    '\\ No newline at end of file',
+  ].join('\n');
+  const added = parseAddedLines(patch);
+  assert.deepStrictEqual([...added].sort((a, b) => a - b), [11, 12]);
+});
+test('parseAddedLines: empty / missing patch ⇒ empty set (no throw)', () => {
+  assert.strictEqual(parseAddedLines('').size, 0);
+  assert.strictEqual(parseAddedLines(undefined).size, 0);
+});
+test('methodIsChanged: any single added line within the span is enough', () => {
+  const m = { lineStart: 40, lineEnd: 60 };
+  assert.strictEqual(methodIsChanged(m, new Set([9999, 55])), true);
+  assert.strictEqual(methodIsChanged(m, new Set([10, 61])), false);
+});
+test('matchCoverageKey: Windows backslash keys match a POSIX rel path (0/1/2 cases)', () => {
+  const keys = ['C:\\r\\src\\engine\\tier1.js', 'C:\\r\\src\\engine\\crap.js'];
+  assert.strictEqual(matchCoverageKey(keys, 'src/engine/tier1.js').key, keys[0]);
+  assert.ok(matchCoverageKey(keys, 'src/engine/missing.js').skip, 'no match ⇒ skip, never cov=0');
+  const dup = ['C:\\a\\src\\x.js', 'C:\\a\\dist\\src\\x.js'];
+  assert.ok(matchCoverageKey(dup, 'src/x.js').skip, 'ambiguous ⇒ skip');
+});
+test('coverageAllZero: true only when nothing anywhere ran (the worst lie: mass false alarm)', () => {
+  assert.strictEqual(coverageAllZero({ 'a.js': { s: { 0: 0, 1: 0 } }, 'b.js': { s: { 0: 0 } } }), true);
+  assert.strictEqual(coverageAllZero({ 'a.js': { s: { 0: 0 } }, 'b.js': { s: { 0: 1 } } }), false);
+});
+test('isLikelyGenerated: a >2000-char line trips the minified guard', () => {
+  assert.strictEqual(isLikelyGenerated('const x = 1;\n' + 'a'.repeat(2500)), true);
+  assert.strictEqual(isLikelyGenerated('const x = 1;\nconst y = 2;'), false);
+});
+test('analyzeFileParsed: criterion 1 & 2 from synthetic data (uncovered flags 56, covered scores 7)', () => {
+  const methods = [{ name: 'riskScore', lineStart: 1, lineEnd: 9, cyclomatic: 7 }];
+  const statementMap = {}; const s = {};
+  for (let i = 0; i < 7; i++) { statementMap[i] = { start: { line: 2 + i } }; s[i] = 0; } // uncovered
+  const added = new Set([1, 2, 3, 4, 5]);
+  const un = analyzeFileParsed({ relPath: 'r.js', methods, statementMap, s, addedLines: added, threshold: 30 });
+  assert.strictEqual(un[0].score, 56); assert.strictEqual(un[0].flagged, true); assert.strictEqual(un[0].name, 'riskScore');
+  const s2 = {}; for (let i = 0; i < 7; i++) s2[i] = 1; // fully covered
+  const cov = analyzeFileParsed({ relPath: 'r.js', methods, statementMap, s: s2, addedLines: added, threshold: 30 });
+  assert.strictEqual(cov[0].score, 7); assert.strictEqual(cov[0].score, cov[0].complexity); assert.strictEqual(cov[0].flagged, false);
+});
+test('analyzeFileParsed: an UNCHANGED complex+uncovered function is not scored', () => {
+  const methods = [{ name: 'far', lineStart: 100, lineEnd: 130, cyclomatic: 12 }];
+  const rows = analyzeFileParsed({ relPath: 'r.js', methods, statementMap: {}, s: {}, addedLines: new Set([1, 2]), threshold: 30 });
+  assert.strictEqual(rows.length, 0, 'CRAP only speaks to functions the PR touched');
+});
+test('buildCrapRow: flagged ⇒ soft fail; clean ⇒ pass; nothing ⇒ skip; rows sort worst-first', () => {
+  const flagged = buildCrapRow({ rows: [
+    { file: 'a.js', name: 'lo', lineStart: 1, complexity: 2, covered: 0, total: 3, covPct: 0, score: 6, flagged: false },
+    { file: 'a.js', name: 'hi', lineStart: 9, complexity: 8, covered: 0, total: 5, covPct: 0, score: 72, flagged: true },
+  ], skips: [], threshold: 30 });
+  assert.strictEqual(flagged.status, 'fail');
+  assert.strictEqual(flagged.hard, false, 'ALWAYS soft — never gates');
+  assert.ok(flagged.output.indexOf('hi') < flagged.output.indexOf('lo'), 'worst function listed first');
+  const clean = buildCrapRow({ rows: [{ file: 'a.js', name: 'ok', lineStart: 1, complexity: 3, covered: 3, total: 3, covPct: 100, score: 3, flagged: false }], skips: [], threshold: 30 });
+  assert.strictEqual(clean.status, 'pass');
+  const empty = buildCrapRow({ rows: [], skips: ['x.js: complexity parse failed'], threshold: 30 });
+  assert.strictEqual(empty.status, 'skip');
+  assert.match(empty.output, /complexity parse failed/, 'skip reasons are surfaced, not hidden');
+});
+test('config default: crap is disabled with threshold 30 (opt-in)', () => {
+  const c = merge({ commands: { install: 'i', test: 't' } }, null);
+  assert.strictEqual(c.crap.enabled, false);
+  assert.strictEqual(c.crap.threshold, 30);
+  // A user can enable it and set a stricter threshold.
+  const u = merge({ commands: { install: 'i', test: 't' } }, { crap: { enabled: true, threshold: 6 } });
+  assert.strictEqual(u.crap.enabled, true);
+  assert.strictEqual(u.crap.threshold, 6);
 });
 
 // Run the deferred async tests (judge wire-contract) after the sync suite, then tally.
