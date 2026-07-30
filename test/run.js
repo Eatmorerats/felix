@@ -1616,6 +1616,60 @@ test('deps: config.merge fills the deps defaults (disabled) and lets a user enab
   assert.strictEqual(merge({}, { deps: { enabled: true } }).deps.enabled, true);
 });
 
+test('deps: overlapping cycles in one SCC — removing an edge (improvement) does NOT phantom-flag', () => {
+  // Probe-confirmed on dc 18.1.0: a base SCC {a,b,c} with edges a→b, b→a, b→c, c→a reports TWO
+  // cycle keys — cycle:a.js|b.js and cycle:a.js|b.js|c.js. A PR removing b→a leaves only the
+  // a|b|c cycle on head, and that key is already in baseKeys ⇒ pre-existing, no candidate.
+  const base = [
+    cyc('a.js', ['b.js', 'a.js']),               // key a|b
+    cyc('b.js', ['c.js', 'a.js', 'b.js']),       // key a|b|c
+  ];
+  const head = [cyc('a.js', ['b.js', 'c.js', 'a.js'])]; // key a|b|c only (b→a removed)
+  const filesAll = [{ status: 'modified', filename: 'b.js' }];
+  const { candidates, preExisting } = diffViolations({
+    headViolations: head, baseViolations: base,
+    renameMap: buildRenameMap(filesAll), changedSet: buildChangedSet(filesAll),
+  });
+  assert.strictEqual(candidates.length, 0, 'a structure improvement must never flag');
+  assert.strictEqual(preExisting, 1);
+});
+test('deps: import-order permutation of the same SCC yields the identical key set', () => {
+  const set = (vs) => Array.from(new Set(vs.map((v) => keyOf(v)))).sort();
+  const order1 = set([cyc('a.js', ['b.js', 'a.js']), cyc('b.js', ['c.js', 'a.js', 'b.js'])]);
+  const order2 = set([cyc('b.js', ['c.js', 'a.js', 'b.js']), cyc('a.js', ['b.js', 'a.js'])]);
+  assert.deepStrictEqual(order1, order2);
+  assert.deepStrictEqual(order1, ['cycle:a.js|b.js', 'cycle:a.js|b.js|c.js']);
+});
+test('deps: ESM SCC cycles key with FULL membership (probe-confirmed 5 distinct keys)', () => {
+  // dc 18.1.0 on a 5-node .mjs SCC emits 5 simple cycles, each cycle[] closing back to `from`.
+  const esm = [
+    cyc('a.mjs', ['b.mjs', 'a.mjs']),
+    cyc('a.mjs', ['c.mjs', 'b.mjs', 'a.mjs']),
+    cyc('b.mjs', ['c.mjs', 'b.mjs']),
+    cyc('c.mjs', ['d.mjs', 'e.mjs', 'c.mjs']),
+    cyc('d.mjs', ['e.mjs', 'a.mjs', 'b.mjs', 'c.mjs', 'd.mjs']),
+  ];
+  assert.deepStrictEqual(esm.map((v) => keyOf(v)).sort(), [
+    'cycle:a.mjs|b.mjs',
+    'cycle:a.mjs|b.mjs|c.mjs',
+    'cycle:a.mjs|b.mjs|c.mjs|d.mjs|e.mjs',
+    'cycle:b.mjs|c.mjs',
+    'cycle:c.mjs|d.mjs|e.mjs',
+  ]);
+});
+test('deps: a copied file does NOT contribute its previous_filename (renamed-only attribution)', () => {
+  const filesAll = [{ status: 'copied', filename: 'dst.js', previous_filename: 'src.js' }];
+  const rm = buildRenameMap(filesAll);
+  const cs = buildChangedSet(filesAll);
+  assert.strictEqual(rm.has('src.js'), false, 'a copy is not a rename — no key rewrite');
+  assert.strictEqual(cs.has('src.js'), false, 'the copy source still exists in head — not attributable');
+  assert.strictEqual(cs.has('dst.js'), true);
+});
+test('deps: a layer named no-circular is rejected (reserved for the injected cycle rule)', () => {
+  const { error } = buildForbiddenRules({ layers: [{ name: 'no-circular', from: 'a/**', to: 'b/**' }] }, picomatchLib);
+  assert.match(error, /reserved name/);
+});
+
 // Run the deferred async tests (judge wire-contract) after the sync suite, then tally.
 (async () => {
   if (asyncTests.length) console.log('judge — provider wire contract (R2b, injected fetch)');

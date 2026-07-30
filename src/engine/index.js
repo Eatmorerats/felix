@@ -138,7 +138,7 @@ async function run(opts) {
     // the narrower behavioral subset used for the per-file test re-runs.
     const t1 = await runTier1({
       cwd, env: sandbox.cleanEnv, config, files: triage.behavioral,
-      repoPath, baseSha: pr.base.sha, filesAll: files,
+      repoPath, baseSha: pr.base.sha, headSha, filesAll: files,
     });
     tier1 = t1.results;
     installFailed = t1.installFailed;

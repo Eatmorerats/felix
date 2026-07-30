@@ -159,7 +159,7 @@ function changedTestFiles(files, config) {
     .map((f) => f.filename);
 }
 
-async function runTier1({ cwd, env, config, files, repoPath, baseSha, filesAll }) {
+async function runTier1({ cwd, env, config, files, repoPath, baseSha, headSha, filesAll }) {
   const c = config.commands || {};
   const t = config.timeouts || {};
   const isolation = resolveIsolation(config);
@@ -201,11 +201,12 @@ async function runTier1({ cwd, env, config, files, repoPath, baseSha, filesAll }
 
   // Dependency-direction check (opt-in, soft/advisory). Gate FIRST so a disabled repo
   // builds no graph and its verdict stays byte-identical — nothing is pushed here at all.
-  // filesAll is the FULL changed-file list (rename map + attribution); it falls back to the
-  // behavioral `files` if the caller couldn't thread the wider list.
+  // It cruises pristine base+head worktrees itself (not `cwd`), so no sandbox dir is passed.
+  // filesAll MUST be the FULL changed-file list — no fallback to the behavioral `files`
+  // subset (a filtered list would miss renames and phantom-flag; runDepsCheck SKIPs on absence).
   if (config.deps && config.deps.enabled) {
     results.push(await runDepsCheck({
-      cwd, repoPath, baseSha, filesAll: filesAll || files, config, run,
+      repoPath, baseSha, headSha, filesAll, config, run,
       timeoutMs: config.deps.timeoutMs || 120000,
     }));
   }

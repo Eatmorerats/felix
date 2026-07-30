@@ -207,9 +207,17 @@ cycle the PR merely keeps is never re-flagged. It is **soft/advisory** in v1 —
 
 `layers` is optional — with just `"enabled": true` you get full cycle detection and nothing
 else. `node_modules` is always excluded; set `includeOnly` (a regex) to scope one package of a
-monorepo. A missing base commit, a cruiser failure, or a timeout **skips** with a labeled
-reason — a data problem may only ever *reduce* the flags, never manufacture one. See the `deps`
-block in [`felix.config.example.json`](./felix.config.example.json).
+monorepo. Both commits are cruised from **pristine detached worktrees** (never the just-built
+sandbox), so the head and base graphs stay symmetric and a pre-existing structure never reads as
+new. A missing base/head commit, a cruiser failure, a timeout, or a PR whose file list GitHub
+truncated (>3000 files) **skips** with a labeled reason — a data problem may only ever *reduce*
+the flags, never manufacture one.
+
+v1 detects cycles and forbidden edges via **static relative-import analysis**; because both
+sides are cruised without `node_modules`, a cycle mediated *only* through an installed workspace
+package (a `@scope/pkg` symlink) is not resolved on either side — a deliberate symmetric miss, so
+it under-reports rather than crying wolf. See the `deps` block in
+[`felix.config.example.json`](./felix.config.example.json).
 
 ## Large PRs and rate limits
 

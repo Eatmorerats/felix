@@ -82,7 +82,7 @@ function check(name, fn) {
     const headSha = await commitAll(dir, 'head b to a creates cycle');
 
     row1 = await runDepsCheck({
-      cwd: dir, repoPath: dir, baseSha, headSha,
+      repoPath: dir, baseSha, headSha,
       filesAll: [{ status: 'modified', filename: 'b.js' }],
       config: depsOn(), run, timeoutMs: 120000,
     });
@@ -104,7 +104,7 @@ function check(name, fn) {
     const headSha = await commitAll(dir, 'head benign no cycle');
 
     row2 = await runDepsCheck({
-      cwd: dir, repoPath: dir, baseSha, headSha,
+      repoPath: dir, baseSha, headSha,
       filesAll: [{ status: 'modified', filename: 'b.js' }],
       config: depsOn(), run, timeoutMs: 120000,
     });
@@ -123,7 +123,7 @@ function check(name, fn) {
     const headSha = await commitAll(dir, 'head benign change keeps cycle');
 
     row3 = await runDepsCheck({
-      cwd: dir, repoPath: dir, baseSha, headSha,
+      repoPath: dir, baseSha, headSha,
       filesAll: [{ status: 'modified', filename: 'c.js' }],
       config: depsOn(), run, timeoutMs: 120000,
     });
@@ -148,10 +148,53 @@ function check(name, fn) {
     // repoPath/baseSha are threaded in the real pipeline; with deps OFF they must go unused.
     const { results } = await runTier1({
       cwd: dir, env: process.env, config, files: [{ filename: 'runner.js', status: 'added' }],
-      repoPath: dir, baseSha: 'deadbeef', filesAll: [{ filename: 'runner.js', status: 'added' }],
+      repoPath: dir, baseSha: 'deadbeef', headSha: 'cafef00d', filesAll: [{ filename: 'runner.js', status: 'added' }],
     });
     const depsRow = results.find((c) => c.name === 'deps');
     assert.strictEqual(depsRow, undefined, 'no deps row when disabled — the verdict is byte-identical');
+  });
+
+  // ── FIX 1: head is cruised from its OWN pristine worktree, never the sandbox cwd ──
+  await check('FIX 1 — head is cruised from a pristine worktree, not the working dir (no phantom)', async () => {
+    const dir = await initRepo();
+    fs.writeFileSync(path.join(dir, 'a.js'), "require('./b');\n");
+    fs.writeFileSync(path.join(dir, 'b.js'), 'module.exports = {};\n');
+    const baseSha = await commitAll(dir, 'base a to b no cycle');
+    fs.writeFileSync(path.join(dir, 'b.js'), '// benign committed edit, still no cycle\nmodule.exports = { ok: true };\n');
+    const headSha = await commitAll(dir, 'head benign no cycle');
+    // Now DIRTY the working tree with an UNCOMMITTED cycle. If the check cruised `cwd`
+    // (the working tree) it would FLAG this; cruising the pristine head worktree it must PASS.
+    fs.writeFileSync(path.join(dir, 'b.js'), "require('./a');\nmodule.exports = { ok: true };\n"); // uncommitted b→a cycle
+
+    const row = await runDepsCheck({
+      repoPath: dir, baseSha, headSha,
+      filesAll: [{ status: 'modified', filename: 'b.js' }],
+      config: depsOn(), run, timeoutMs: 120000,
+    });
+    assert.strictEqual(row.status, 'pass',
+      `head must be cruised pristine (committed head has no cycle) — got ${row.status}: ${row.detail}`);
+    // And both throwaway worktrees must be torn down.
+    const wt = path.join(dir, '.felix-worktrees');
+    const leftovers = fs.existsSync(wt) ? fs.readdirSync(wt).filter((n) => /^deps-(head|base)-/.test(n)) : [];
+    assert.deepStrictEqual(leftovers, [], `deps worktrees must be removed, found: ${leftovers.join(', ')}`);
+  });
+
+  // ── ESM: a `.mjs` import cycle is detected and keyed with full membership ──
+  await check('ESM — a new .mjs import cycle is detected and flagged (full-membership key)', async () => {
+    const dir = await initRepo();
+    fs.writeFileSync(path.join(dir, 'a.mjs'), "import './b.mjs';\n");
+    fs.writeFileSync(path.join(dir, 'b.mjs'), 'export const b = 1;\n'); // base: a→b only, no cycle
+    const baseSha = await commitAll(dir, 'base esm a to b no cycle');
+    fs.writeFileSync(path.join(dir, 'b.mjs'), "import './a.mjs';\nexport const b = 1;\n"); // head: b→a ⇒ cycle
+    const headSha = await commitAll(dir, 'head esm b to a creates cycle');
+
+    const row = await runDepsCheck({
+      repoPath: dir, baseSha, headSha,
+      filesAll: [{ status: 'modified', filename: 'b.mjs' }],
+      config: depsOn(), run, timeoutMs: 120000,
+    });
+    assert.strictEqual(row.status, 'fail', `ESM cycle must be flagged, got ${row.status}: ${row.detail}`);
+    assert.match(row.detail, /a\.mjs ↔ b\.mjs/, `ESM cycle detail names both files:\n${row.detail}`);
   });
 
   console.log('\nReal Tier 1 rows produced:');

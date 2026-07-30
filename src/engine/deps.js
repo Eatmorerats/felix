@@ -161,16 +161,20 @@ function mapBaseFn(renameMap) {
 }
 
 /**
- * Every path this PR touched, in head-name space: changed filenames plus any
- * previous filenames. A violation must intersect this to be flagged (the
- * attribution gate) — a new-in-the-diff violation that touches NO changed file is
- * a resolution artifact, counted for debug and never flagged.
+ * Every path this PR touched, in head-name space: changed filenames plus the
+ * previous filename of a RENAME only. A violation must intersect this to be flagged
+ * (the attribution gate) — a new-in-the-diff violation that touches NO changed file
+ * is a resolution artifact, counted for debug and never flagged.
+ *
+ * The previous_filename half is renamed-ONLY: a `copied` file also carries
+ * previous_filename, but its source still exists unmodified in head, so counting the
+ * old path would spuriously widen attribution onto a file the PR did not touch.
  */
 function buildChangedSet(filesAll) {
   const s = new Set();
   for (const f of filesAll || []) {
     if (f && f.filename) s.add(norm(f.filename));
-    if (f && f.previous_filename) s.add(norm(f.previous_filename));
+    if (f && f.status === 'renamed' && f.previous_filename) s.add(norm(f.previous_filename));
   }
   return s;
 }
@@ -319,6 +323,9 @@ function buildForbiddenRules(depsCfg, picomatch) {
     if (!l || typeof l.name !== 'string' || !l.name.trim()) {
       return { error: `invalid deps.layers[${i}] (missing name)` };
     }
+    // `no-circular` is the injected cycle rule — a layer of the same name would collide
+    // in the edge key and silently shadow it, so reserve it.
+    if (l.name === 'no-circular') return { error: `invalid deps.layers[${i}]: reserved name "no-circular"` };
     if (seen.has(l.name)) return { error: `invalid deps.layers[${i}] (duplicate name "${l.name}")` };
     seen.add(l.name);
     if (!l.from || !l.to) return { error: `invalid deps.layers[${i}] (from and to are required)` };
@@ -339,18 +346,23 @@ function buildForbiddenRules(depsCfg, picomatch) {
  * Render the ONE temp dependency-cruiser config used for BOTH cruises. Passing an
  * explicit `--config` means the target repo's OWN .dependency-cruiser.js never
  * loads — a base-vs-head difference in the repo's config would break the symmetry
- * the whole diff relies on. node_modules is always excluded AND not-followed.
+ * the whole diff relies on.
+ *
+ * ALL excludes (the user's `deps.exclude` ∪ the mandatory node_modules + Felix's own
+ * worktree dir) go into BOTH options.exclude.path and options.doNotFollow.path. The
+ * CLI `--exclude` flag is NOT used: dependency-cruiser lets a CLI `--exclude`
+ * silently OVERRIDE the config's exclude, which would quietly kill the user's
+ * `deps.exclude` patterns. node_modules must stay excluded so the graph is the
+ * relative-import graph (FIX 1: both sides are pristine, node_modules-free worktrees).
  */
 function renderDcConfig(depsCfg, forbiddenRules) {
-  // node_modules and Felix's OWN worktree dir are always excluded — the base checkout lives
-  // under .felix-worktrees/ inside the repo, so cruising it would double-count every module.
   const excludes = Array.from(new Set([
     ...(((depsCfg && depsCfg.exclude) || [])), '(^|/)node_modules/', '(^|/)\\.felix-worktrees/',
   ]));
   const excludePath = excludes.map((e) => `(?:${e})`).join('|');
   const options = {
     exclude: { path: excludePath },
-    doNotFollow: { path: '(^|/)node_modules/' },
+    doNotFollow: { path: excludePath },
   };
   if (depsCfg && depsCfg.includeOnly) options.includeOnly = { path: depsCfg.includeOnly };
   return 'module.exports = ' + JSON.stringify({ forbidden: forbiddenRules, options }, null, 2) + ';\n';
@@ -379,26 +391,40 @@ function resolveDcBin() {
   return null;
 }
 
-// ── the runner (async, does I/O — cruises head + a base worktree) ─────────────
+// ── the runner (async, does I/O — cruises TWO pristine worktrees) ─────────────
 /**
  * Run the deps check. The CALLER guarantees deps is enabled (the enabled gate lives
  * in runTier1, before any output is registered, so a disabled repo's verdict is
  * byte-identical — no worktree, no require, no row). This always returns a Tier 1
  * row: a real pass/fail, or a labeled SKIP explaining why the graph couldn't be
- * trusted (missing base, dc failure, timeout). hard:false on every path.
+ * trusted (missing base/head, dc failure, timeout, truncated file list). hard:false
+ * on every path.
+ *
+ * FIX 1 (symmetry) — cruise BOTH sides from pristine detached worktrees created from
+ * `repoPath`, NEVER from the sandbox `cwd`. The sandbox has already run
+ * install (network-allowed) + build + test, so it carries node_modules, workspace
+ * symlinks and build artifacts; the base worktree is pristine. Cruising head from the
+ * sandbox and base from a clean checkout is an ASYMMETRY that manufactures phantoms —
+ * e.g. a workspace-symlink-mediated cycle resolves on head but `couldNotResolve` on
+ * base, so a years-old cycle looks new. Two pristine worktrees (both node_modules-free,
+ * since renderDcConfig excludes it) degrade identically and cancel in the diff.
+ * Consequence (documented residual, C5-class): cycles/edges mediated ONLY through
+ * installed workspace packages are invisible on BOTH sides — a symmetric MISS, the
+ * tolerable direction. Relative-import cycles resolve without node_modules, so the
+ * acceptance criteria still hold.
  *
  * @param {object}   o
- * @param {string}   o.cwd        head checkout (the sandbox workdir) to cruise
  * @param {string}   o.repoPath   git clone that owns the object store (for worktree add)
- * @param {string}   o.baseSha    PR base commit — cruised in a throwaway worktree
- * @param {string}   [o.headSha]  PR head commit; only used to short-circuit base===head
- * @param {Array}    o.filesAll   FULL changed-file list (rename map + attribution)
+ * @param {string}   o.baseSha    PR base commit — cruised in a throwaway pristine worktree
+ * @param {string}   o.headSha    PR head commit — cruised in its OWN throwaway pristine worktree
+ * @param {Array}    o.filesAll   FULL changed-file list (rename map + attribution); NOT the
+ *                                behavioral subset. Absent/null ⇒ SKIP (B7), never substituted.
  * @param {object}   o.config     merged Felix config (config.deps holds the block)
  * @param {Function} o.run        the shell-command runner from util/exec (cmd,{cwd,timeoutMs})
  * @param {number}   [o.timeoutMs] per-cruise cap
  * @param {object}   [o.deps]     test seam: { dcBin, run, fs }
  */
-async function runDepsCheck({ cwd, repoPath, baseSha, headSha, filesAll, config, run, timeoutMs, deps = {} }) {
+async function runDepsCheck({ repoPath, baseSha, headSha, filesAll, config, run, timeoutMs, deps = {} }) {
   const path = require('path');
   const os = require('os');
   const fs = deps.fs || require('fs');
@@ -422,9 +448,21 @@ async function runDepsCheck({ cwd, repoPath, baseSha, headSha, filesAll, config,
   if (!dcBin) return skip('skipped: dependency-cruiser not resolvable');
 
   if (!baseSha) return skip('skipped: no base commit provided — cannot attribute violations to this PR');
+  if (!headSha) return skip('skipped: no head commit provided — cannot build a pristine head graph');
+
+  // FIX 2 / B7 — the FULL getFiles list is mandatory. The attribution gate does NOT
+  // backstop a filtered (behavioral) list: a rename of a triaged-out file would be
+  // missed by the rename map and phantom-flag a pre-existing cycle. Absent ⇒ SKIP,
+  // NEVER substitute the narrower list.
+  if (!filesAll) return skip('skipped: full file list unavailable — cannot attribute');
+  // FIX 4 / B8 — GitHub's getFiles pages to 30×100 = 3000 (a hard cap). At/above the cap
+  // the list may be truncated, so the rename map could silently drop renames ⇒ phantom.
+  if (filesAll.length >= 3000) {
+    return skip(`skipped: PR too large to attribute (file list truncated at ${filesAll.length} files)`);
+  }
 
   // base === head ⇒ trivially empty diff, no need to cruise twice.
-  if (headSha && baseSha === headSha) {
+  if (baseSha === headSha) {
     return buildDepsRow({ candidates: [], suppressed: [], preExisting: 0, couplingLines: [] });
   }
 
@@ -437,57 +475,85 @@ async function runDepsCheck({ cwd, repoPath, baseSha, headSha, filesAll, config,
   try { fs.writeFileSync(cfgPath, renderDcConfig(depsCfg, built.rules)); }
   catch (e) { cleanupScratch(); return skip(`skipped: could not write deps config (${e.message})`); }
 
-  // Base worktree (same mechanics as sandbox.js), torn down in the finally.
+  // Two pristine worktrees (same mechanics as sandbox.js), both torn down in the finally.
   const worktreeBase = path.join(repoPath, '.felix-worktrees', `deps-base-${String(baseSha).slice(0, 8)}`);
-  let worktreeAdded = false;
+  const worktreeHead = path.join(repoPath, '.felix-worktrees', `deps-head-${String(headSha).slice(0, 8)}`);
+  let baseAdded = false;
+  let headAdded = false;
 
-  const cruise = async (dir) => {
-    const cmd = `node "${dcBin}" . --config "${cfgPath}" --output-type json --exclude "(^|/)node_modules/"`;
+  const addWorktree = async (dir, sha) => {
+    await runFn(`git worktree remove --force "${dir}" || true`, { cwd: repoPath, timeoutMs: 60000 });
+    const add = await runFn(`git worktree add --detach --force "${dir}" ${sha}`, { cwd: repoPath, timeoutMs: cap });
+    return Boolean(add && add.code === 0);
+  };
+
+  // Cruise a dir, reading dc's JSON from a FILE (not stdout) so the shared run helper's
+  // 200KB stdout cap can never truncate the report on a large repo. dc writes the file
+  // even when it exits non-zero (violations present) — confirmed on 18.1.0.
+  const cruise = async (dir, tag) => {
+    const outFile = path.join(scratch, `dc-${tag}.json`);
+    const cmd = `node "${dcBin}" . --config "${cfgPath}" --output-type json --output-to "${outFile}"`;
     const r = await runFn(cmd, { cwd: dir, timeoutMs: cap });
     if (r.timedOut) return { timedOut: true };
-    // dc exits non-zero when error-severity violations exist; the JSON is still on stdout.
-    try { return { json: JSON.parse(r.stdout) }; }
+    let raw;
+    try { raw = fs.readFileSync(outFile, 'utf8'); }
     catch (e) {
-      const firstErr = String(r.stderr || r.combined || e.message || '').split('\n')[0] || 'no JSON on stdout';
+      const firstErr = String(r.stderr || r.combined || e.message || '').split('\n')[0] || 'dc produced no output file';
+      return { error: firstErr };
+    }
+    try { return { json: JSON.parse(raw) }; }
+    catch (e) {
+      const firstErr = String(r.stderr || r.combined || e.message || '').split('\n')[0] || 'dc output was not valid JSON';
       return { error: firstErr };
     }
   };
 
   try {
-    await runFn(`git worktree remove --force "${worktreeBase}" || true`, { cwd: repoPath, timeoutMs: 60000 });
-    const add = await runFn(`git worktree add --detach --force "${worktreeBase}" ${baseSha}`, { cwd: repoPath, timeoutMs: cap });
-    if (!add || add.code !== 0) {
+    if (!(await addWorktree(worktreeBase, baseSha))) {
       return skip(`skipped: base commit ${String(baseSha).slice(0, 8)} unavailable — cannot attribute violations to this PR`);
     }
-    worktreeAdded = true;
+    baseAdded = true;
+    if (!(await addWorktree(worktreeHead, headSha))) {
+      return skip(`skipped: head commit ${String(headSha).slice(0, 8)} unavailable — cannot build a pristine head graph`);
+    }
+    headAdded = true;
 
     // HEAD first: if the PR's own graph won't build, there's nothing to compare.
-    const headRes = await cruise(cwd);
+    const headRes = await cruise(worktreeHead, 'head');
     if (headRes.timedOut) return skip(`skipped: dependency-cruiser timed out after ${cap}ms`);
     if (headRes.error) return skip(`skipped: dependency-cruiser failed on head — ${headRes.error}`);
-    if (!headRes.json.modules || headRes.json.modules.length === 0) {
+    const headModules = headRes.json.modules || [];
+    if (headModules.length === 0) {
       return skip('skipped: no modules found on head (check deps.includeOnly)');
     }
 
     // BASE: on failure SKIP — NEVER treat the base key set as empty (that would flag
     // every pre-existing cycle as new — the exact cry-wolf this check exists to avoid).
-    const baseRes = await cruise(worktreeBase);
+    const baseRes = await cruise(worktreeBase, 'base');
     if (baseRes.timedOut) return skip(`skipped: dependency-cruiser timed out after ${cap}ms`);
     if (baseRes.error) return skip(`skipped: dependency-cruiser failed on base — ${baseRes.error}`);
+    const baseModules = baseRes.json.modules || [];
+    // B6b — the mirror of the head guard. dc on an empty/partial base tree exits 0 with
+    // zero modules, which would make baseKeys=∅ and flag every pre-existing violation.
+    if (baseModules.length === 0 && headModules.length > 0) {
+      return skip('skipped: no modules found on base — cannot attribute');
+    }
 
     const renameMap = buildRenameMap(filesAll);
     const changedSet = buildChangedSet(filesAll);
     const headViolations = extract(headRes.json);
     const baseViolations = extract(baseRes.json);
     const { candidates, suppressed, preExisting } = diffViolations({ headViolations, baseViolations, renameMap, changedSet });
-    const couplingLines = couplingDelta({
-      headModules: headRes.json.modules, baseModules: baseRes.json.modules, changedSet, renameMap,
-    });
+    const couplingLines = couplingDelta({ headModules, baseModules, changedSet, renameMap });
     return buildDepsRow({ candidates, suppressed, preExisting, couplingLines });
   } finally {
-    if (worktreeAdded) {
+    if (headAdded) {
+      try { await runFn(`git worktree remove --force "${worktreeHead}"`, { cwd: repoPath, timeoutMs: 60000 }); }
+      catch (e) { logger.warn(`deps head worktree teardown: ${e.message}`); }
+    }
+    if (baseAdded) {
       try { await runFn(`git worktree remove --force "${worktreeBase}"`, { cwd: repoPath, timeoutMs: 60000 }); }
-      catch (e) { logger.warn(`deps worktree teardown: ${e.message}`); }
+      catch (e) { logger.warn(`deps base worktree teardown: ${e.message}`); }
     }
     cleanupScratch();
   }
