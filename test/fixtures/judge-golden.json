@@ -1,0 +1,884 @@
+{
+  "A1_plain_singlepass_emptyTier1": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: PR one\n\nACCEPTANCE CRITERIA:\n1. login works\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\nsome diff\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}",
+  "A2_adversarial_singlepass": "You are a SKEPTICAL independent verification judge. You did NOT write this code. Your job is\nto catch PRs that only APPEAR to satisfy their acceptance criteria.\nFor EACH criterion, work strictly in this order:\n  1. REFUTE — write the single strongest CONCRETE reason the submitted code does NOT satisfy\n     the criterion: a missing case, an unhandled path, a mock hiding real behavior, an\n     unimplemented branch. Ground it in the actual diff + test evidence, not speculation.\n  2. DECIDE — mark met:true ONLY if that refutation clearly fails against the diff + test\n     evidence. If the refutation stands, or the evidence is ambiguous or absent, mark met:false.\nJudge behavior and evidence, not intentions. The diff includes the full added source for new\nfiles, so an implementation present in the diff counts as shown. When unsure, prefer met:false.\n\nPR title: PR one\n\nACCEPTANCE CRITERIA:\n1. login works\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\nsome diff\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"refutation\":\"<strongest reason it is NOT met>\",\"met\":true|false,\"reason\":\"<why the refutation does or does not hold>\"}]}",
+  "A3_plain_chunked_failoutput": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 2 OF 4 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: PR three\n\nACCEPTANCE CRITERIA:\n1. first\n2. second\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n- build: PASS (exit 0)\n- lint: FAIL (2 problems)\n\nFAILING CHECK OUTPUT:\n### lint output\na.js:1 no-unused\nb.js:9 semi\n\nUNIFIED DIFF (part 2 of 4):\n```diff\npart 2 diff body\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}",
+  "A4_adversarial_chunked": "You are a SKEPTICAL independent verification judge. You did NOT write this code. Your job is\nto catch PRs that only APPEAR to satisfy their acceptance criteria.\nFor EACH criterion, work strictly in this order:\n  1. REFUTE — write the single strongest CONCRETE reason the submitted code does NOT satisfy\n     the criterion: a missing case, an unhandled path, a mock hiding real behavior, an\n     unimplemented branch. Ground it in the actual diff + test evidence, not speculation.\n  2. DECIDE — mark met:true ONLY if that refutation clearly fails against the diff + test\n     evidence. If the refutation stands, or the evidence is ambiguous or absent, mark met:false.\nJudge behavior and evidence, not intentions. The diff includes the full added source for new\nfiles, so an implementation present in the diff counts as shown. When unsure, prefer met:false.\n\nIMPORTANT: you are being shown PART 3 OF 4 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: PR four\n\nACCEPTANCE CRITERIA:\n1. only criterion\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n- test: PASS (ok)\n\n\nUNIFIED DIFF (part 3 of 4):\n```diff\nadversarial chunk diff\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"refutation\":\"<strongest reason it is NOT met, or empty if not_shown>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}",
+  "A5_emptyCriteria_failNoOutput": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: PR five\n\nACCEPTANCE CRITERIA:\n(none provided)\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n- x: FAIL (boom)\n\n\nUNIFIED DIFF:\n```diff\nd5\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}",
+  "A6_chunk_1of1_identical_to_A1": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: PR one\n\nACCEPTANCE CRITERIA:\n1. login works\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\nsome diff\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}",
+  "A7_diff_null_coercion": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: p\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\n\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}",
+  "G1_openai_happy": {
+    "fetch": {
+      "openai": [
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk-test",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: p\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\nd\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}"
+        }
+      ]
+    },
+    "sleeps": [],
+    "result": {
+      "family": "openai",
+      "model": "gpt-4.1",
+      "adversarial": false,
+      "assessment": "a",
+      "criteria": [
+        {
+          "text": "c",
+          "met": true,
+          "reason": "ok"
+        }
+      ]
+    }
+  },
+  "G2_gemini_happy": {
+    "fetch": {
+      "gemini": [
+        {
+          "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
+          "headers": {
+            "x-goog-api-key": "g-key",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: p\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\nd\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}"
+        }
+      ]
+    },
+    "sleeps": [],
+    "result": {
+      "family": "gemini",
+      "model": "gemini-3.6-flash",
+      "adversarial": false,
+      "assessment": "g",
+      "criteria": [
+        {
+          "text": "c",
+          "met": false,
+          "reason": "nope"
+        }
+      ]
+    }
+  },
+  "G3_chunked_precedence_pacing": {
+    "fetch": {
+      "openai": [
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 1 OF 5 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: big\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 1 of 5):\n```diff\ndiff --git a/src/f0.js b/src/f0.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 2 OF 5 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: big\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 2 of 5):\n```diff\ndiff --git a/src/f1.js b/src/f1.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 3 OF 5 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: big\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 3 of 5):\n```diff\ndiff --git a/src/f2.js b/src/f2.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 4 OF 5 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: big\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 4 of 5):\n```diff\ndiff --git a/src/f3.js b/src/f3.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 5 OF 5 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: big\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 5 of 5):\n```diff\ndiff --git a/src/f4.js b/src/f4.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        }
+      ]
+    },
+    "sleeps": [
+      50220,
+      50220,
+      50220,
+      50220
+    ],
+    "logs": [
+      "info: openai judge: part 1/5 (1 file(s))",
+      "info: openai judge: part 2/5 (1 file(s))",
+      "info: openai judge: part 3/5 (1 file(s))",
+      "info: openai judge: part 4/5 (1 file(s))",
+      "info: openai judge: part 5/5 (1 file(s))"
+    ],
+    "result": {
+      "family": "openai",
+      "model": "gpt-4.1",
+      "adversarial": false,
+      "chunked": true,
+      "coverage": {
+        "totalChars": 6504,
+        "judgedChars": 6500,
+        "chunkCount": 5,
+        "omittedPaths": [],
+        "omittedChars": 0,
+        "truncatedPaths": [],
+        "overBudget": false
+      },
+      "assessment": "Diff too large for one call — judged in 5 parts covering ~100% of the diff.\n- part 1: part 1\n- part 2: part 2\n- part 3: part 3\n- part 4: part 4\n- part 5: part 5",
+      "criteria": [
+        {
+          "text": "c",
+          "met": false,
+          "reason": "Part 3 of 5 found a violation: r"
+        }
+      ]
+    }
+  },
+  "G3b_maxchunks_boundary": {
+    "fetch": {
+      "openai": [
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 1 OF 8 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: boundary\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 1 of 8):\n```diff\ndiff --git a/src/a0.js b/src/a0.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 2 OF 8 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: boundary\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 2 of 8):\n```diff\ndiff --git a/src/a1.js b/src/a1.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 3 OF 8 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: boundary\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 3 of 8):\n```diff\ndiff --git a/src/a2.js b/src/a2.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 4 OF 8 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: boundary\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 4 of 8):\n```diff\ndiff --git a/src/a3.js b/src/a3.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 5 OF 8 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: boundary\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 5 of 8):\n```diff\ndiff --git a/src/a4.js b/src/a4.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 6 OF 8 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: boundary\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 6 of 8):\n```diff\ndiff --git a/src/a5.js b/src/a5.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 7 OF 8 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: boundary\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 7 of 8):\n```diff\ndiff --git a/src/a6.js b/src/a6.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 8 OF 8 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: boundary\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 8 of 8):\n```diff\ndiff --git a/src/a7.js b/src/a7.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        }
+      ]
+    },
+    "sleeps": [
+      40860,
+      40860,
+      40860,
+      40860,
+      40860,
+      40860,
+      40860
+    ],
+    "logs": [
+      "info: openai judge: part 1/8 (1 file(s))",
+      "info: openai judge: part 2/8 (1 file(s))",
+      "info: openai judge: part 3/8 (1 file(s))",
+      "info: openai judge: part 4/8 (1 file(s))",
+      "info: openai judge: part 5/8 (1 file(s))",
+      "info: openai judge: part 6/8 (1 file(s))",
+      "info: openai judge: part 7/8 (1 file(s))",
+      "info: openai judge: part 8/8 (1 file(s))"
+    ],
+    "result": {
+      "family": "openai",
+      "model": "gpt-4.1",
+      "adversarial": false,
+      "chunked": true,
+      "coverage": {
+        "totalChars": 5383,
+        "judgedChars": 5376,
+        "chunkCount": 8,
+        "omittedPaths": [],
+        "omittedChars": 0,
+        "truncatedPaths": [],
+        "overBudget": false
+      },
+      "assessment": "Diff too large for one call — judged in 8 parts covering ~100% of the diff.\n- part 1: p1\n- part 2: p2\n- part 3: p3\n- part 4: p4\n- part 5: p5\n- part 6: p6\n- part 7: p7\n- part 8: p8",
+      "criteria": [
+        {
+          "text": "c",
+          "met": false,
+          "reason": "No part of the diff showed evidence for this criterion (judged in 8 parts)."
+        }
+      ]
+    }
+  },
+  "G4_chunked_omitted_and_truncated": {
+    "fetch": {
+      "openai": [
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 1 OF 6 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: huge\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 1 of 6):\n```diff\ndiff --git a/src/huge.js b/src/huge.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n…(src/huge.js truncated — 3648 of 5000 chars not shown)…\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 2 OF 6 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: huge\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 2 of 6):\n```diff\ndiff --git a/src/g0.js b/src/g0.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 3 OF 6 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: huge\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 3 of 6):\n```diff\ndiff --git a/src/g1.js b/src/g1.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 4 OF 6 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: huge\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 4 of 6):\n```diff\ndiff --git a/src/g2.js b/src/g2.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 5 OF 6 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: huge\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 5 of 6):\n```diff\ndiff --git a/src/g3.js b/src/g3.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 6 OF 6 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: huge\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 6 of 6):\n```diff\ndiff --git a/src/g4.js b/src/g4.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        }
+      ]
+    },
+    "sleeps": [
+      50220,
+      50220,
+      50220,
+      50220,
+      50220
+    ],
+    "logs": [
+      "info: openai judge: part 1/6 (1 file(s))",
+      "info: openai judge: part 2/6 (1 file(s))",
+      "info: openai judge: part 3/6 (1 file(s))",
+      "info: openai judge: part 4/6 (1 file(s))",
+      "info: openai judge: part 5/6 (1 file(s))",
+      "info: openai judge: part 6/6 (1 file(s))"
+    ],
+    "result": {
+      "family": "openai",
+      "model": "gpt-4.1",
+      "adversarial": false,
+      "chunked": true,
+      "coverage": {
+        "totalChars": 20612,
+        "judgedChars": 7909,
+        "chunkCount": 6,
+        "omittedPaths": [
+          "src/g5.js",
+          "src/g6.js",
+          "src/g7.js",
+          "src/g8.js",
+          "src/g9.js",
+          "src/g10.js",
+          "src/g11.js"
+        ],
+        "omittedChars": 9100,
+        "truncatedPaths": [
+          "src/huge.js"
+        ],
+        "overBudget": false
+      },
+      "assessment": "Diff too large for one call — judged in 6 parts covering ~38% of the diff. PARTIAL: 7 file(s) not judged (src/g5.js, src/g6.js, src/g7.js, src/g8.js, src/g9.js, …). truncated: src/huge.js.\n- part 1: seen\n- part 2: seen\n- part 3: seen\n- part 4: seen\n- part 5: seen\n- part 6: seen",
+      "criteria": [
+        {
+          "text": "c",
+          "met": false,
+          "reason": "No part of the diff showed evidence for this criterion (judged in 6 parts)."
+        }
+      ]
+    }
+  },
+  "G5_jury_unanimous": {
+    "fetch": {
+      "openai": [
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: p\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\nd\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}"
+        }
+      ],
+      "gemini": [
+        {
+          "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
+          "headers": {
+            "x-goog-api-key": "g",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: p\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\nd\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}"
+        }
+      ]
+    },
+    "sleeps": [],
+    "result": {
+      "family": "openai+gemini",
+      "model": "gpt-4.1+gemini-3.6-flash",
+      "adversarial": false,
+      "jury": [
+        {
+          "family": "openai",
+          "model": "gpt-4.1",
+          "assessment": "a",
+          "criteria": [
+            {
+              "text": "c",
+              "met": true,
+              "reason": "ok"
+            }
+          ]
+        },
+        {
+          "family": "gemini",
+          "model": "gemini-3.6-flash",
+          "assessment": "b",
+          "criteria": [
+            {
+              "text": "c",
+              "met": true,
+              "reason": "ok too"
+            }
+          ]
+        }
+      ],
+      "degraded": false,
+      "failures": [],
+      "splits": 0,
+      "assessment": "2-vendor jury (openai + gemini), unanimity required. 0 of 1 criteria split or unmet.\n- openai: a\n- gemini: b",
+      "criteria": [
+        {
+          "text": "c",
+          "met": true,
+          "reason": "ok (unanimous: openai + gemini)"
+        }
+      ]
+    }
+  },
+  "G6_jury_split": {
+    "fetch": {
+      "openai": [
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: p\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\nd\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}"
+        }
+      ],
+      "gemini": [
+        {
+          "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
+          "headers": {
+            "x-goog-api-key": "g",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: p\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\nd\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}"
+        }
+      ]
+    },
+    "sleeps": [],
+    "result": {
+      "family": "openai+gemini",
+      "model": "gpt-4.1+gemini-3.6-flash",
+      "adversarial": false,
+      "jury": [
+        {
+          "family": "openai",
+          "model": "gpt-4.1",
+          "assessment": "a",
+          "criteria": [
+            {
+              "text": "c",
+              "met": true,
+              "reason": "looks fine"
+            }
+          ]
+        },
+        {
+          "family": "gemini",
+          "model": "gemini-3.6-flash",
+          "assessment": "b",
+          "criteria": [
+            {
+              "text": "c",
+              "met": false,
+              "reason": "no test covers it"
+            }
+          ]
+        }
+      ],
+      "degraded": false,
+      "failures": [],
+      "splits": 1,
+      "assessment": "2-vendor jury (openai + gemini), unanimity required. 1 of 1 criteria split or unmet.\n- openai: a\n- gemini: b",
+      "criteria": [
+        {
+          "text": "c",
+          "met": false,
+          "reason": "Split verdict — gemini says NOT met: no test covers it; openai say met."
+        }
+      ]
+    }
+  },
+  "G7_jury_degraded_503": {
+    "fetch": {
+      "openai": [
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: p\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\nd\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}"
+        }
+      ],
+      "gemini": [
+        {
+          "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
+          "headers": {
+            "x-goog-api-key": "g",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: p\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\nd\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
+          "headers": {
+            "x-goog-api-key": "g",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: p\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\nd\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
+          "headers": {
+            "x-goog-api-key": "g",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: p\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\nd\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}"
+        }
+      ]
+    },
+    "sleeps": [
+      20000,
+      40000
+    ],
+    "logs": [
+      "warn: gemini judge rate-limited — retrying in 20s (attempt 1/2).",
+      "warn: gemini judge rate-limited — retrying in 40s (attempt 2/2)."
+    ],
+    "result": {
+      "family": "openai",
+      "model": "gpt-4.1",
+      "adversarial": false,
+      "jury": [
+        {
+          "family": "openai",
+          "model": "gpt-4.1",
+          "assessment": "a",
+          "criteria": [
+            {
+              "text": "c",
+              "met": true,
+              "reason": "ok"
+            }
+          ]
+        }
+      ],
+      "degraded": true,
+      "failures": [
+        {
+          "family": "gemini",
+          "error": "Judge call failed: 503 high demand"
+        }
+      ],
+      "splits": 0,
+      "assessment": "1-vendor jury (openai), unanimity required. DEGRADED — gemini unavailable: Judge call failed: 503 high demand. 0 of 1 criteria split or unmet.\n- openai: a",
+      "criteria": [
+        {
+          "text": "c",
+          "met": true,
+          "reason": "ok (unanimous: openai)"
+        }
+      ]
+    }
+  },
+  "G8_retry_after_header": {
+    "fetch": {
+      "openai": [
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: p\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\nd\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: p\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\nd\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}"
+        }
+      ]
+    },
+    "sleeps": [
+      7000
+    ],
+    "logs": [
+      "warn: openai judge rate-limited — retrying in 7s (attempt 1/2)."
+    ],
+    "result": {
+      "family": "openai",
+      "model": "gpt-4.1",
+      "adversarial": false,
+      "assessment": "a",
+      "criteria": [
+        {
+          "text": "c",
+          "met": true,
+          "reason": "ok"
+        }
+      ]
+    }
+  },
+  "G8b_retry_after_absent_fallback": {
+    "fetch": {
+      "openai": [
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: p\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\nd\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: p\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\nd\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}"
+        }
+      ]
+    },
+    "sleeps": [
+      20000
+    ],
+    "logs": [
+      "warn: openai judge rate-limited — retrying in 20s (attempt 1/2)."
+    ],
+    "result": {
+      "family": "openai",
+      "model": "gpt-4.1",
+      "adversarial": false,
+      "assessment": "a",
+      "criteria": [
+        {
+          "text": "c",
+          "met": true,
+          "reason": "ok"
+        }
+      ]
+    }
+  },
+  "G9_too_large_immediate": {
+    "fetch": {
+      "openai": [
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: p\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\nd\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}"
+        }
+      ]
+    },
+    "sleeps": [],
+    "error": {
+      "message": "Judge call failed: 429 Request too large for gpt-4.1 in organization org-xxxx on tokens per min (TPM): Limit 30000, Requested 61227. The input or output tokens must be reduced in order to run successfully.",
+      "status": 429
+    }
+  },
+  "G10_empty_bench_ordering": {
+    "fetch": {
+      "openai": [
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: p\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\nd\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}"
+        }
+      ]
+    },
+    "sleeps": [],
+    "logs": [
+      "warn: GEMINI_API_KEY not set — gemini judge seat skipped."
+    ],
+    "error": {
+      "message": "All 2 jury seat(s) failed: gemini: GEMINI_API_KEY not set; openai: Judge call failed: 400 bad request: malformed"
+    }
+  },
+  "G11_overhead_over_budget": {
+    "fetch": {},
+    "sleeps": [],
+    "error": {
+      "message": "Judge prompt overhead (683 chars) alone exceeds the openai budget of 50 tokens — no room left for any diff. Reduce the number of acceptance criteria, or raise the seat budget if the account's rate limit allows it."
+    }
+  },
+  "G12_boolean_false_as_not_shown": {
+    "fetch": {
+      "openai": [
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 1 OF 5 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: bool\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 1 of 5):\n```diff\ndiff --git a/src/f0.js b/src/f0.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 2 OF 5 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: bool\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 2 of 5):\n```diff\ndiff --git a/src/f1.js b/src/f1.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 3 OF 5 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: bool\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 3 of 5):\n```diff\ndiff --git a/src/f2.js b/src/f2.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 4 OF 5 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: bool\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 4 of 5):\n```diff\ndiff --git a/src/f3.js b/src/f3.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        },
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nIMPORTANT: you are being shown PART 5 OF 5 of a large diff.\nThe files in this part are complete, but other parts contain other files you cannot see.\nWHAT IS SPLIT: only the UNIFIED DIFF. The DETERMINISTIC CHECK RESULTS (Tier 1) section is\nGLOBAL — those commands ran once against the WHOLE pull request, and you are seeing their\ncomplete results, identical in every part. So for a criterion about the OUTCOME OF A CHECK\n(e.g. \"`npm run build` exits 0\", \"the test suite passes\", \"lint is clean\"), decide it from\nthat result and answer \"met\" or \"violated\" in EVERY part — NEVER \"not_shown\". That evidence\nis not split and is fully in front of you. This does not make a green check evidence for\ncriteria about code: a passing build says nothing about whether a feature was implemented.\nFor each criterion answer with exactly one verdict:\n  \"met\"       — this part of the diff, or the global check results, shows the criterion IS satisfied.\n  \"violated\"  — this part of the diff, or the global check results, shows it is NOT satisfied.\n  \"not_shown\" — neither this part nor the check results bears on the criterion either way.\nUse \"not_shown\" freely for criteria about code. Do NOT answer \"violated\" merely because the\nrelevant code is absent from this part — absence here is expected and is what \"not_shown\" means.\n\nPR title: bool\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF (part 5 of 5):\n```diff\ndiff --git a/src/f4.js b/src/f4.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary of THIS part>\",\"criteria\":[{\"text\":\"<criterion>\",\"verdict\":\"met\"|\"violated\"|\"not_shown\",\"reason\":\"<short>\"}]}"
+        }
+      ]
+    },
+    "sleeps": [
+      50220,
+      50220,
+      50220,
+      50220
+    ],
+    "logs": [
+      "info: openai judge: part 1/5 (1 file(s))",
+      "info: openai judge: part 2/5 (1 file(s))",
+      "info: openai judge: part 3/5 (1 file(s))",
+      "info: openai judge: part 4/5 (1 file(s))",
+      "info: openai judge: part 5/5 (1 file(s))"
+    ],
+    "result": {
+      "family": "openai",
+      "model": "gpt-4.1",
+      "adversarial": false,
+      "chunked": true,
+      "coverage": {
+        "totalChars": 6504,
+        "judgedChars": 6500,
+        "chunkCount": 5,
+        "omittedPaths": [],
+        "omittedChars": 0,
+        "truncatedPaths": [],
+        "overBudget": false
+      },
+      "assessment": "Diff too large for one call — judged in 5 parts covering ~100% of the diff.\n- part 1: p1\n- part 2: p2\n- part 3: p3\n- part 4: p4\n- part 5: p5",
+      "criteria": [
+        {
+          "text": "c",
+          "met": false,
+          "reason": "No part of the diff showed evidence for this criterion (judged in 5 parts)."
+        }
+      ]
+    }
+  },
+  "G13_findRuling_normtext_vs_positional": {
+    "fetch": {
+      "openai": [
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: p\n\nACCEPTANCE CRITERIA:\n1. Login works\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\nd\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}"
+        }
+      ],
+      "gemini": [
+        {
+          "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
+          "headers": {
+            "x-goog-api-key": "g",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: p\n\nACCEPTANCE CRITERIA:\n1. Login works\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\nd\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}"
+        }
+      ]
+    },
+    "sleeps": [],
+    "result": {
+      "family": "openai+gemini",
+      "model": "gpt-4.1+gemini-3.6-flash",
+      "adversarial": false,
+      "jury": [
+        {
+          "family": "openai",
+          "model": "gpt-4.1",
+          "assessment": "a",
+          "criteria": [
+            {
+              "text": "  LOGIN   works ",
+              "met": true,
+              "reason": "matched by normText"
+            }
+          ]
+        },
+        {
+          "family": "gemini",
+          "model": "gemini-3.6-flash",
+          "assessment": "b",
+          "criteria": [
+            {
+              "text": "entirely unrelated wording",
+              "met": false,
+              "reason": "matched positionally"
+            }
+          ]
+        }
+      ],
+      "degraded": false,
+      "failures": [],
+      "splits": 1,
+      "assessment": "2-vendor jury (openai + gemini), unanimity required. 1 of 1 criteria split or unmet.\n- openai: a\n- gemini: b",
+      "criteria": [
+        {
+          "text": "Login works",
+          "met": false,
+          "reason": "Split verdict — gemini says NOT met: matched positionally; openai say met."
+        }
+      ]
+    }
+  },
+  "G14_registry_purity_sentinel": {
+    "fetch": {
+      "openai": [
+        {
+          "url": "https://api.openai.com/v1/chat/completions",
+          "headers": {
+            "Authorization": "Bearer sk",
+            "Content-Type": "application/json"
+          },
+          "prompt": "You are an independent verification judge. You did NOT write this code.\nDecide, for each acceptance criterion, whether the SUBMITTED CODE actually satisfies it.\nJudge behavior and evidence — not intentions. If the diff plus test results do not\nclearly demonstrate a criterion is met, mark it not met. Note: the diff includes the\nfull added source for new files, so an implementation present in the diff counts as shown.\n\nPR title: sentinel\n\nACCEPTANCE CRITERIA:\n1. c\n\nDETERMINISTIC CHECK RESULTS (Tier 1):\n(none)\n\n\nUNIFIED DIFF:\n```diff\ndiff --git a/src/s0.js b/src/s0.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\ndiff --git a/src/s1.js b/src/s1.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\ndiff --git a/src/s2.js b/src/s2.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\ndiff --git a/src/s3.js b/src/s3.js\n@@ -1 +1 @@\n+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nRespond with ONLY JSON of the form:\n{\"assessment\":\"<2-3 sentence summary>\",\"criteria\":[{\"text\":\"<criterion>\",\"met\":true|false,\"reason\":\"<short>\"}]}"
+        }
+      ]
+    },
+    "sleeps": [],
+    "result": {
+      "family": "openai",
+      "model": "gpt-4.1",
+      "adversarial": false,
+      "assessment": "whole",
+      "criteria": [
+        {
+          "text": "c",
+          "met": true,
+          "reason": "ok"
+        }
+      ]
+    }
+  }
+}
