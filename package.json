@@ -10,7 +10,8 @@
     "felix": "node bin/felix.js",
     "test": "node test/run.js",
     "calibrate": "node test/calibrate.js",
-    "test:live": "node test/live-flows.js"
+    "test:live": "node test/live-flows.js",
+    "test:deps": "node test/deps-live.js"
   },
   "keywords": [
     "pr-verification",
@@ -32,6 +33,7 @@
   "type": "commonjs",
   "dependencies": {
     "@supabase/supabase-js": "^2.99.1",
+    "dependency-cruiser": "^18.1.0",
     "dotenv": "^17.3.1",
     "picomatch": "^4.0.2"
   }

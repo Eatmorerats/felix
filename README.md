@@ -182,6 +182,35 @@ own scan to advisory. Use gitleaks, or trufflehog with verification **off** — 
 verification, which fires network requests using attacker-controlled PR content (SSRF/egress
 risk on untrusted diffs).
 
+### Dependency direction (opt-in)
+
+Building and testing a PR tells you nothing about the *shape* of its import graph. When
+`deps.enabled`, Felix cruises the module graph of the **head** commit and the **base** commit
+with [dependency-cruiser](https://github.com/sverweij/dependency-cruiser) and flags what the PR
+**newly** introduces: a new **circular import** (`a → b → a`), or a new edge that crosses a
+**forbidden layer** you declared (e.g. "the engine must not import from `bin/`"). Both graphs
+are built by the same cruiser, same version, same temp ruleset — so any fidelity gap degrades
+both sides identically and cancels in the diff. A violation is only reported when it is (a)
+absent from the base graph **and** (b) touches a file this PR changed, so a **pre-existing**
+cycle the PR merely keeps is never re-flagged. It is **soft/advisory** in v1 — the row reads
+`FLAG` / `ok` in words (never colour) and it never gates a verdict.
+
+```json
+"deps": {
+  "enabled": true,
+  "layers": [
+    { "name": "engine-no-cli", "from": "src/engine/**", "to": "bin/**",
+      "comment": "engine code must not reach the CLI entrypoints" }
+  ]
+}
+```
+
+`layers` is optional — with just `"enabled": true` you get full cycle detection and nothing
+else. `node_modules` is always excluded; set `includeOnly` (a regex) to scope one package of a
+monorepo. A missing base commit, a cruiser failure, or a timeout **skips** with a labeled
+reason — a data problem may only ever *reduce* the flags, never manufacture one. See the `deps`
+block in [`felix.config.example.json`](./felix.config.example.json).
+
 ## Large PRs and rate limits
 
 A judge prompt is sized against the **account's tokens-per-minute (TPM) rate limit**, not the

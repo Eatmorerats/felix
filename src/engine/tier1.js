@@ -14,6 +14,7 @@ const picomatch = require('picomatch');
 const { run, tail } = require('./util/exec');
 const { wrapCommand, resolveIsolation } = require('./isolation');
 const { buildDrivePlan, driveApp } = require('./drive');
+const { runDepsCheck } = require('./deps');
 const { logger } = require('./util/logger');
 
 // Vendor-specific, high-signal secret shapes. A match here has a distinctive prefix
@@ -158,7 +159,7 @@ function changedTestFiles(files, config) {
     .map((f) => f.filename);
 }
 
-async function runTier1({ cwd, env, config, files }) {
+async function runTier1({ cwd, env, config, files, repoPath, baseSha, filesAll }) {
   const c = config.commands || {};
   const t = config.timeouts || {};
   const isolation = resolveIsolation(config);
@@ -197,6 +198,17 @@ async function runTier1({ cwd, env, config, files }) {
   }));
 
   results.push(await runCheck({ name: 'test', hard: true, cmd: c.test, cwd, env, timeoutMs: t.testMs || 600000, isolation, network: 'deny' }));
+
+  // Dependency-direction check (opt-in, soft/advisory). Gate FIRST so a disabled repo
+  // builds no graph and its verdict stays byte-identical — nothing is pushed here at all.
+  // filesAll is the FULL changed-file list (rename map + attribution); it falls back to the
+  // behavioral `files` if the caller couldn't thread the wider list.
+  if (config.deps && config.deps.enabled) {
+    results.push(await runDepsCheck({
+      cwd, repoPath, baseSha, filesAll: filesAll || files, config, run,
+      timeoutMs: config.deps.timeoutMs || 120000,
+    }));
+  }
 
   // Drive the running app (R1, opt-in): boot it and probe declared routes. These
   // are HARD checks — a 500/404/blank boot on a declared route → NOT VERIFIED.

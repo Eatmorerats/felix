@@ -34,6 +34,17 @@ const DEFAULT_SECRETS = {
   externalScan: '',
 };
 
+// Opt-in dependency-direction check (deps.js). Default OFF: soft/advisory only in v1, so a
+// repo that never sets deps.enabled builds no graph and its verdict is byte-identical. layers
+// are optional forbidden edges (picomatch globs); node_modules is always excluded regardless.
+const DEFAULT_DEPS = {
+  enabled: false,
+  layers: [],
+  exclude: ['(^|/)node_modules/'],
+  includeOnly: '',
+  timeoutMs: 120000,
+};
+
 function exists(p) {
   try { return fs.existsSync(p); } catch { return false; }
 }
@@ -212,6 +223,7 @@ function merge(detected, user) {
   out.test = { ...((detected || {}).test || {}), ...((user || {}).test || {}) };
   out.smoke = { ...((detected || {}).smoke || {}), ...((user || {}).smoke || {}) };
   out.secrets = { ...DEFAULT_SECRETS, ...((detected || {}).secrets || {}), ...((user || {}).secrets || {}) };
+  out.deps = { ...DEFAULT_DEPS, ...((detected || {}).deps || {}), ...((user || {}).deps || {}) };
   out.timeouts = { ...DEFAULT_TIMEOUTS, ...((detected || {}).timeouts || {}), ...((user || {}).timeouts || {}) };
   out.isolation = { ...((detected || {}).isolation || {}), ...((user || {}).isolation || {}) };
   // Only materialize `drive` when one side actually has it, so non-web repos stay clean. The
@@ -268,5 +280,5 @@ function loadConfig(repoPath) {
 
 module.exports = {
   loadConfig, detect, merge, validate,
-  DEFAULT_SKIP_GLOBS, DEFAULT_TIMEOUTS, DEFAULT_SECRETS,
+  DEFAULT_SKIP_GLOBS, DEFAULT_TIMEOUTS, DEFAULT_SECRETS, DEFAULT_DEPS,
 };
