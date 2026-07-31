@@ -19,6 +19,10 @@ const {
 } = require('../src/engine/budget');
 const { scanSecrets, shannonEntropy, looksLikeRealSecret } = require('../src/engine/tier1');
 const {
+  parseAddedLines, matchCoverageKey, attributeStatements, functionCoverage, crapScore,
+  methodIsChanged, analyzeFileParsed, coverageAllZero, isLikelyGenerated, buildCrapRow,
+} = require('../src/engine/crap');
+const {
   keyOf, buildRenameMap, mapBaseFn, buildChangedSet, diffViolations,
   couplingDelta, buildForbiddenRules, renderDcConfig, buildDepsRow,
 } = require('../src/engine/deps');
@@ -351,7 +355,11 @@ atest('openai judge posts to chat/completions with a bearer key and parses messa
   assert.strictEqual(ff.calls[0].opts.headers.Authorization, 'Bearer sk-test');
   assert.strictEqual(ff.calls[0].body.model, 'gpt-4.1');                       // per-family default
   assert.deepStrictEqual(ff.calls[0].body.response_format, { type: 'json_object' });
-  assert.deepStrictEqual(out, { family: 'openai', model: 'gpt-4.1', adversarial: false, assessment: 'a', criteria: [{ text: 'c', met: true }] });
+  // `reason` is always present now: a solo seat's rulings are projected onto the spec by
+  // alignSingleRulings, so this path emits the same {text, met, reason} shape the jury and
+  // chunk merges have always emitted. It previously echoed the model's array verbatim,
+  // which is what let a silent judge pass. 'met' is the filler when the model gave none.
+  assert.deepStrictEqual(out, { family: 'openai', model: 'gpt-4.1', adversarial: false, assessment: 'a', criteria: [{ text: 'c', met: true, reason: 'met' }] });
 });
 atest('gemini judge sends the key in the x-goog-api-key header (never the URL) and parses candidates parts', async () => {
   const ff = fakeFetch({ candidates: [{ content: { parts: [{ text: '{"assessment":"g","criteria":[{"text":"c","met":false}]}' }] }, finishReason: 'STOP' }] });
@@ -364,7 +372,9 @@ atest('gemini judge sends the key in the x-goog-api-key header (never the URL) a
   assert.ok(!call.url.includes('g-key'), 'the API key must never appear in the URL');
   assert.strictEqual(call.opts.headers['x-goog-api-key'], 'g-key');
   assert.strictEqual(call.body.generationConfig.responseMimeType, 'application/json');
-  assert.deepStrictEqual(out, { family: 'gemini', model: 'gemini-3.6-flash', adversarial: false, assessment: 'g', criteria: [{ text: 'c', met: false }] });
+  // Same projected shape as the openai contract above; '(no reason given)' is the filler on
+  // the not-met branch, so a blocking criterion never reaches a human with an empty reason.
+  assert.deepStrictEqual(out, { family: 'gemini', model: 'gemini-3.6-flash', adversarial: false, assessment: 'g', criteria: [{ text: 'c', met: false, reason: '(no reason given)' }] });
 });
 atest('gemini blocked/non-STOP response throws a clear finishReason error (not a JSON parse error)', async () => {
   const ff = fakeFetch({ candidates: [{ content: { parts: [] }, finishReason: 'SAFETY' }] });
@@ -1070,7 +1080,12 @@ atest('an empty bench (every seat fails) is a hard error, not a pass', async () 
     openai: { ok: false, status: 500, body: 'boom' },
     gemini: { ok: false, status: 500, body: 'boom' },
   });
-  await assert.rejects(createJudge(JURY_ENV, { fetchImpl: ff })(JURY_INPUT), /All 2 jury seat\(s\) failed/);
+  // sleepImpl matters here: a 500 is retryable, so both seats burn the full retry backoff.
+  // Without it this one test spent ~60s of real wall-clock — the whole suite's runtime.
+  await assert.rejects(
+    createJudge(JURY_ENV, { fetchImpl: ff, sleepImpl: noSleep })(JURY_INPUT),
+    /All 2 jury seat\(s\) failed/,
+  );
 });
 
 atest('per-seat models are honored positionally', async () => {
@@ -1347,6 +1362,131 @@ atest('an ordinary PR still makes exactly ONE call with the original boolean sch
   assert.strictEqual(out.chunked, undefined);          // unchanged result shape
 });
 
+// ─── the single-seat silence hole ────────────────────────────────────────────
+// "Silence is never a pass" is the rule mergeJuryResults and mergeChunkRulings both
+// enforce by mapping over the SPEC's criteria. The single-seat, single-call path — the
+// default and documented setup — returned the model's `criteria` array verbatim instead,
+// so a judge that ruled on nothing had nothing with met === false and composed to
+// VERIFIED. These seven cases are the degenerate responses a real model actually emits:
+// a truncated completion, a rate-limited partial retry, a summary instead of an
+// enumeration, a stringified boolean. Each asserts BOTH halves — that the seat's own
+// output is projected onto the spec, AND that the verdict it composes to is NOT VERIFIED.
+// The verdict half is the one that matters; the projection is only how we get there.
+const SILENT_SPEC = [
+  { text: 'adds a POST /login endpoint' },
+  { text: 'rejects a bad password with 401' },
+  { text: 'never logs the password' },
+];
+const SILENT_INPUT = { prTitle: 'p', criteria: SILENT_SPEC, diff: 'd', tier1: [] };
+const silentSpec = { hadRealSpec: true, total: 3, mappedCount: 3, source: 'PR description' };
+
+// Drive the REAL default path: one seat, one call, then the real compose(). Nothing is
+// stubbed between the model's bytes and the verdict.
+async function judgeThenCompose(rawJudgeJson) {
+  const ff = fakeFetch({ choices: [{ message: { content: JSON.stringify(rawJudgeJson) } }] });
+  const tier3 = await createJudge({ OPENAI_API_KEY: 'sk' }, { fetchImpl: ff, sleepImpl: noSleep })(SILENT_INPUT);
+  return { tier3, verdict: compose({ triage: {}, spec: silentSpec, tier1: goodTier1, tier3 }).verdict };
+}
+
+atest('SILENCE 1/7 — an empty criteria array is NOT VERIFIED, not a free pass', async () => {
+  const { tier3, verdict } = await judgeThenCompose({ assessment: 'looks good to me', criteria: [] });
+  assert.strictEqual(tier3.criteria.length, 3, 'the seat must answer for every spec criterion');
+  assert.deepStrictEqual(tier3.criteria.map((c) => c.met), [false, false, false]);
+  assert.strictEqual(verdict, VERDICTS.NOT_VERIFIED);
+});
+
+atest('SILENCE 2/7 — criteria sent as a string ("all good") is NOT VERIFIED', async () => {
+  const { tier3, verdict } = await judgeThenCompose({ assessment: 'a', criteria: 'all good' });
+  assert.strictEqual(tier3.criteria.length, 3);
+  assert.strictEqual(verdict, VERDICTS.NOT_VERIFIED);
+});
+
+atest('SILENCE 3/7 — the criteria field omitted entirely is NOT VERIFIED', async () => {
+  const { tier3, verdict } = await judgeThenCompose({ assessment: 'a' });
+  assert.strictEqual(tier3.criteria.length, 3);
+  assert.strictEqual(verdict, VERDICTS.NOT_VERIFIED);
+});
+
+atest('SILENCE 4/7 — ruling on 1 of 3 criteria does not carry the other 2', async () => {
+  const { tier3, verdict } = await judgeThenCompose({
+    assessment: 'a',
+    criteria: [{ text: 'adds a POST /login endpoint', met: true, reason: 'saw the route' }],
+  });
+  assert.deepStrictEqual(tier3.criteria.map((c) => c.met), [true, false, false]);
+  assert.match(tier3.criteria[1].reason, /no ruling/i, 'the silence must be named, not implied');
+  assert.strictEqual(verdict, VERDICTS.NOT_VERIFIED);
+});
+
+atest('SILENCE 5/7 — a ruling with no `met` field is NOT met', async () => {
+  const { tier3, verdict } = await judgeThenCompose({
+    assessment: 'a',
+    criteria: SILENT_SPEC.map((c) => ({ text: c.text, reason: 'looks fine' })),   // met absent
+  });
+  assert.deepStrictEqual(tier3.criteria.map((c) => c.met), [false, false, false]);
+  assert.strictEqual(verdict, VERDICTS.NOT_VERIFIED);
+});
+
+atest('SILENCE 6/7 — met:"false" as a STRING is not a truthy pass', async () => {
+  const { tier3, verdict } = await judgeThenCompose({
+    assessment: 'a',
+    criteria: SILENT_SPEC.map((c) => ({ text: c.text, met: 'false', reason: 'nope' })),
+  });
+  assert.deepStrictEqual(tier3.criteria.map((c) => c.met), [false, false, false]);
+  assert.strictEqual(verdict, VERDICTS.NOT_VERIFIED);
+});
+
+atest('SILENCE 7/7 — rulings on criteria that are not in the spec cannot satisfy it', async () => {
+  const { tier3, verdict } = await judgeThenCompose({
+    assessment: 'a',
+    criteria: [{ text: 'the code is well formatted', met: true, reason: 'tidy' }],
+  });
+  // Criteria 2 and 3 have no ruling at any position, so they block regardless of what
+  // findRuling's deliberate positional fallback does with the first one.
+  assert.strictEqual(tier3.criteria.length, 3);
+  assert.deepStrictEqual(tier3.criteria.slice(1).map((c) => c.met), [false, false]);
+  assert.strictEqual(verdict, VERDICTS.NOT_VERIFIED);
+});
+
+atest('a genuinely complete single-seat pass is still VERIFIED — the fix must not cry wolf', async () => {
+  const { tier3, verdict } = await judgeThenCompose({
+    assessment: 'all three confirmed',
+    criteria: SILENT_SPEC.map((c) => ({ text: c.text, met: true, reason: 'confirmed in the diff' })),
+  });
+  assert.deepStrictEqual(tier3.criteria.map((c) => c.met), [true, true, true]);
+  assert.match(tier3.criteria[0].reason, /confirmed in the diff/, 'the judge\'s own reason must survive');
+  assert.strictEqual(tier3.chunked, undefined, 'a real single pass is still not a chunked result');
+  assert.strictEqual(verdict, VERDICTS.VERIFIED);
+});
+
+// verdict.js half of the same hole: compose() is fed by more than the single-seat path,
+// so it must not read anything-that-is-not-`true` as met on its own account.
+test('compose treats a non-boolean `met` as unmet, not as a pass', () => {
+  for (const met of [undefined, null, 'false', 0, 'true', 1, {}]) {
+    const v = compose({
+      triage: {}, spec: silentSpec, tier1: goodTier1,
+      tier3: { criteria: [{ text: 'login', met, reason: 'r' }] },
+    });
+    assert.strictEqual(v.verdict, VERDICTS.NOT_VERIFIED, `met: ${JSON.stringify(met)} must not pass`);
+  }
+});
+
+atest('a diff too big to fit takes the chunked path even when it packs into ONE chunk', async () => {
+  // The old gate was chunks.length === 1, which a single oversized file also satisfies —
+  // so a truncated, partially-judged diff returned the single-pass shape and the coverage
+  // record saying so never reached the comment. The honest gate is plan.singlePass.
+  const oneHugeFile = `diff --git a/big.js b/big.js\n--- a/big.js\n+++ b/big.js\n${'+x\n'.repeat(4000)}`;
+  const ff = fakeFetch({ choices: [{ message: { content: JSON.stringify({ assessment: 'a', criteria: SILENT_SPEC.map((c) => ({ text: c.text, verdict: 'met', reason: 'ok' })) }) } }] });
+  const out = await createJudge(
+    { OPENAI_API_KEY: 'sk', FELIX_JUDGE_MAX_PROMPT_TOKENS: '1200' },
+    { fetchImpl: ff, sleepImpl: noSleep },
+  )({ prTitle: 'p', criteria: SILENT_SPEC, diff: oneHugeFile, tier1: [] });
+
+  assert.strictEqual(ff.calls.length, 1, 'this diff must pack into exactly one chunk or the test proves nothing');
+  assert.strictEqual(out.chunked, true, 'a truncated single chunk is NOT a single pass');
+  assert.ok(out.coverage.judgedChars < out.coverage.totalChars, 'coverage must record what was left out');
+  assert.match(out.assessment, /Diff too large for one call/, 'the comment must admit partial coverage');
+});
+
 atest('a "request too large" 429 is NOT retried — waiting cannot shrink the request', async () => {
   const ff = fakeFetch(
     'Request too large for gpt-4.1 on tokens per min (TPM): Limit 30000, Requested 61227',
@@ -1441,6 +1581,135 @@ atest('the two-vendor jury still requires unanimity when one seat had to chunk',
 
   assert.strictEqual(out.criteria[0].met, false, 'one dissent must still block');
   assert.match(out.criteria[0].reason, /Split verdict/);
+});
+
+console.log('crap — the fusion math (where a wrong check LIES)');
+test('crapScore: fully covered collapses to raw complexity, exactly', () => {
+  // The boundary criterion 2 depends on: covered==total ⇒ score === comp with no float dust.
+  for (const comp of [1, 5, 7, 12, 30]) {
+    assert.strictEqual(crapScore(comp, 5, 5), comp, `comp ${comp} fully covered → ${comp}`);
+  }
+  assert.strictEqual(crapScore(7, 0, 0), 7, 'zero-statement function ⇒ comp, no divide-by-zero');
+});
+test('crapScore: fully uncovered explodes to comp² + comp', () => {
+  assert.strictEqual(crapScore(7, 0, 9), 56, 'comp 7 uncovered → 49 + 7 = 56');
+  assert.strictEqual(crapScore(5, 0, 3), 30, 'comp 5 uncovered → 25 + 5 = 30 (the boundary)');
+  assert.strictEqual(crapScore(6, 0, 4), 42, 'comp 6 uncovered → 36 + 6 = 42');
+});
+test('crapScore: the comparator is strict > (comp-5-uncovered lands ON 30, not over)', () => {
+  const threshold = 30;
+  assert.strictEqual(crapScore(5, 0, 3) > threshold, false, 'exactly 30 is NOT flagged (strict >)');
+  assert.strictEqual(crapScore(7, 0, 9) > threshold, true, '56 is flagged');
+});
+test('crapScore: partial coverage sits between the extremes', () => {
+  // comp 10, half covered: 100·(0.5)³ + 10 = 12.5 + 10 = 22.5
+  assert.strictEqual(crapScore(10, 5, 10), 22.5);
+});
+test('functionCoverage: a HOT statement counts once, not by hit-count (the count-vs-boolean lie)', () => {
+  // The classic lying bug: summing s[] lets one 5000-hit line mask an uncovered function.
+  const s = { 0: 5000, 1: 0, 2: 0, 3: 0 };
+  const cov = functionCoverage(['0', '1', '2', '3'], s);
+  assert.strictEqual(cov.covered, 1, 'exactly one statement ran');
+  assert.strictEqual(cov.total, 4);
+  // ⇒ frac 0.25, not 0.9998 — the function correctly reads as mostly uncovered.
+  assert.ok(crapScore(8, cov.covered, cov.total) > 30, 'a barely-covered complex fn still flags');
+});
+test('attributeStatements: innermost wins — an uncovered inline callback does NOT drag the outer down', () => {
+  // outer spans 1–8; a nested arrow spans line 3. A statement on line 3 belongs to the
+  // arrow, not outer — so outer stays fully covered even though the callback never ran.
+  const methods = [
+    { name: 'outer', lineStart: 1, lineEnd: 8, cyclomatic: 3 },
+    { name: '<anon method-1>', lineStart: 3, lineEnd: 3, cyclomatic: 1 },
+  ];
+  const statementMap = { 0: { start: { line: 2 } }, 1: { start: { line: 3 } }, 2: { start: { line: 5 } } };
+  const attr = attributeStatements(methods, statementMap);
+  assert.deepStrictEqual(attr.get(0), ['0', '2'], 'outer owns lines 2 and 5, NOT 3');
+  assert.deepStrictEqual(attr.get(1), ['1'], 'the arrow owns line 3');
+});
+test('attributeStatements: an exact-span tie drops the statement (fails toward silence)', () => {
+  const methods = [
+    { name: 'a', lineStart: 1, lineEnd: 3, cyclomatic: 1 },
+    { name: 'b', lineStart: 1, lineEnd: 3, cyclomatic: 1 },
+  ];
+  const attr = attributeStatements(methods, { 0: { start: { line: 2 } } });
+  assert.deepStrictEqual(attr.get(0), [], 'neither method claims the tied statement');
+  assert.deepStrictEqual(attr.get(1), []);
+});
+test('parseAddedLines: only + lines count; deletions do not advance, context does', () => {
+  const patch = [
+    '@@ -10,3 +10,4 @@',
+    ' context',   // line 10
+    '-old removed',
+    '+added A',    // line 11
+    '+added B',    // line 12
+    ' context2',   // line 13
+    '\\ No newline at end of file',
+  ].join('\n');
+  const added = parseAddedLines(patch);
+  assert.deepStrictEqual([...added].sort((a, b) => a - b), [11, 12]);
+});
+test('parseAddedLines: empty / missing patch ⇒ empty set (no throw)', () => {
+  assert.strictEqual(parseAddedLines('').size, 0);
+  assert.strictEqual(parseAddedLines(undefined).size, 0);
+});
+test('methodIsChanged: any single added line within the span is enough', () => {
+  const m = { lineStart: 40, lineEnd: 60 };
+  assert.strictEqual(methodIsChanged(m, new Set([9999, 55])), true);
+  assert.strictEqual(methodIsChanged(m, new Set([10, 61])), false);
+});
+test('matchCoverageKey: Windows backslash keys match a POSIX rel path (0/1/2 cases)', () => {
+  const keys = ['C:\\r\\src\\engine\\tier1.js', 'C:\\r\\src\\engine\\crap.js'];
+  assert.strictEqual(matchCoverageKey(keys, 'src/engine/tier1.js').key, keys[0]);
+  assert.ok(matchCoverageKey(keys, 'src/engine/missing.js').skip, 'no match ⇒ skip, never cov=0');
+  const dup = ['C:\\a\\src\\x.js', 'C:\\a\\dist\\src\\x.js'];
+  assert.ok(matchCoverageKey(dup, 'src/x.js').skip, 'ambiguous ⇒ skip');
+});
+test('coverageAllZero: true only when nothing anywhere ran (the worst lie: mass false alarm)', () => {
+  assert.strictEqual(coverageAllZero({ 'a.js': { s: { 0: 0, 1: 0 } }, 'b.js': { s: { 0: 0 } } }), true);
+  assert.strictEqual(coverageAllZero({ 'a.js': { s: { 0: 0 } }, 'b.js': { s: { 0: 1 } } }), false);
+});
+test('isLikelyGenerated: a >2000-char line trips the minified guard', () => {
+  assert.strictEqual(isLikelyGenerated('const x = 1;\n' + 'a'.repeat(2500)), true);
+  assert.strictEqual(isLikelyGenerated('const x = 1;\nconst y = 2;'), false);
+});
+test('analyzeFileParsed: criterion 1 & 2 from synthetic data (uncovered flags 56, covered scores 7)', () => {
+  const methods = [{ name: 'riskScore', lineStart: 1, lineEnd: 9, cyclomatic: 7 }];
+  const statementMap = {}; const s = {};
+  for (let i = 0; i < 7; i++) { statementMap[i] = { start: { line: 2 + i } }; s[i] = 0; } // uncovered
+  const added = new Set([1, 2, 3, 4, 5]);
+  const un = analyzeFileParsed({ relPath: 'r.js', methods, statementMap, s, addedLines: added, threshold: 30 });
+  assert.strictEqual(un[0].score, 56); assert.strictEqual(un[0].flagged, true); assert.strictEqual(un[0].name, 'riskScore');
+  const s2 = {}; for (let i = 0; i < 7; i++) s2[i] = 1; // fully covered
+  const cov = analyzeFileParsed({ relPath: 'r.js', methods, statementMap, s: s2, addedLines: added, threshold: 30 });
+  assert.strictEqual(cov[0].score, 7); assert.strictEqual(cov[0].score, cov[0].complexity); assert.strictEqual(cov[0].flagged, false);
+});
+test('analyzeFileParsed: an UNCHANGED complex+uncovered function is not scored', () => {
+  const methods = [{ name: 'far', lineStart: 100, lineEnd: 130, cyclomatic: 12 }];
+  const rows = analyzeFileParsed({ relPath: 'r.js', methods, statementMap: {}, s: {}, addedLines: new Set([1, 2]), threshold: 30 });
+  assert.strictEqual(rows.length, 0, 'CRAP only speaks to functions the PR touched');
+});
+test('buildCrapRow: flagged ⇒ soft fail; clean ⇒ pass; nothing ⇒ skip; rows sort worst-first', () => {
+  const flagged = buildCrapRow({ rows: [
+    { file: 'a.js', name: 'lo', lineStart: 1, complexity: 2, covered: 0, total: 3, covPct: 0, score: 6, flagged: false },
+    { file: 'a.js', name: 'hi', lineStart: 9, complexity: 8, covered: 0, total: 5, covPct: 0, score: 72, flagged: true },
+  ], skips: [], threshold: 30 });
+  assert.strictEqual(flagged.status, 'fail');
+  assert.strictEqual(flagged.hard, false, 'ALWAYS soft — never gates');
+  assert.ok(flagged.output.indexOf('hi') < flagged.output.indexOf('lo'), 'worst function listed first');
+  const clean = buildCrapRow({ rows: [{ file: 'a.js', name: 'ok', lineStart: 1, complexity: 3, covered: 3, total: 3, covPct: 100, score: 3, flagged: false }], skips: [], threshold: 30 });
+  assert.strictEqual(clean.status, 'pass');
+  const empty = buildCrapRow({ rows: [], skips: ['x.js: complexity parse failed'], threshold: 30 });
+  assert.strictEqual(empty.status, 'skip');
+  assert.match(empty.output, /complexity parse failed/, 'skip reasons are surfaced, not hidden');
+});
+test('config default: crap is disabled with threshold 30 (opt-in)', () => {
+  const c = merge({ commands: { install: 'i', test: 't' } }, null);
+  assert.strictEqual(c.crap.enabled, false);
+  assert.strictEqual(c.crap.threshold, 30);
+  // A user can enable it and set a stricter threshold.
+  const u = merge({ commands: { install: 'i', test: 't' } }, { crap: { enabled: true, threshold: 6 } });
+  assert.strictEqual(u.crap.enabled, true);
+  assert.strictEqual(u.crap.threshold, 6);
 });
 
 console.log('deps — dependency-direction check (Tier 1, opt-in, soft)');

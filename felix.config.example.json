@@ -103,6 +103,12 @@
     "adversarial": false
   },
 
+  "crap": {
+    "$comment": "CRAP (Change Risk Anti-Patterns) — a SOFT, advisory Tier 1 signal that flags CHANGED functions which are both complex and under-tested: CRAP = complexity^2 * (1 - coverage)^3 + complexity. Node/JS only (v1). Enabling it runs your test suite a SECOND time under c8 coverage, so it is OFF by default. threshold is the score above which a function is flagged (crap4j convention is 30; Uncle Bob drives to <6). It NEVER gates the verdict — a data problem (missing coverage, parse failure) always downgrades to a labeled skip, never a false flag.",
+    "enabled": false,
+    "threshold": 30
+  },
+
   "timeouts": {
     "installMs": 300000,
     "testMs": 600000,
