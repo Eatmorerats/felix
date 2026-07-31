@@ -148,6 +148,39 @@ To run Felix on this repo's own PRs, add a `.github/workflows/felix.yml` — see
 is auto-detected. See [`felix.config.example.json`](./felix.config.example.json).
 Auto-detection currently covers **node/ts, python, go, rust**.
 
+### Which half of the config a pull request can change
+
+This file is written by whoever opens the PR, so it is split at a trust boundary. **A pull
+request cannot change the policy it is judged by.**
+
+| | Fields | Read from |
+|---|---|---|
+| **Policy** | `skipGlobs` · `workdir` · `gating` · `isolation` · `secrets` · `timeouts` · `smoke` · `crap` · `deps` · `drive` · `judge` | the **base ref** — the PR's own copy is ignored |
+| **Mechanics** | `language` · `commands` · `test` | the **PR head** |
+
+Policy is read from `felix.config.json` at `pull_request.base.sha`. Change it the way you
+change any other protected thing: open a PR, get it reviewed, merge it. It takes effect for
+PRs opened *after* it lands. If the base ref has no config, policy is the built-in defaults —
+never the PR's values. If the base ref can't be read at all, Felix **refuses to verify** rather
+than fall back to head.
+
+Mechanics come from head on purpose: a PR that adds a test runner, renames a script or
+switches tooling has to be verified with *its* commands. Note this means `commands.test` is
+still PR-controlled — but so is the `package.json` script it usually points at, so locking it
+to base would buy nothing. What covers that is the rule below.
+
+**Felix's own control surface is never skipped.** `felix.config.json`, `package.json` (at any
+depth) and `.github/workflows/**` are always treated as behavioural, whatever `skipGlobs` says
+— the default globs would otherwise let a PR touching only those merge unverified and change
+the base that everything above trusts. The practical effect: **dependency-bump PRs now get
+fully verified instead of skipped.** That is intended; a lockfile bump is behavioural.
+
+> **Marking the check Required?** Set `"gating": { "blockOn": ["NOT VERIFIED", "INSUFFICIENT
+> EVIDENCE"] }` in the base config. GitHub counts `neutral` and `skipped` as *passing*, and
+> INSUFFICIENT EVIDENCE maps to `neutral` — so with the default `blockOn` a PR with no
+> acceptance criteria, a broken install, or a fork PR (no judge secret) does not block. The
+> trust boundary makes the policy honest; it does not by itself make the gate hard.
+
 ### Driving the app (opt-in)
 
 Building and testing a PR can pass while the running app is broken. When `drive.enabled`,

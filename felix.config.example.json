@@ -1,6 +1,8 @@
 {
   "$comment": "Per-repo Felix config. Place as felix.config.json at the TARGET repo root. This example is for a Node/TS repo. Felix is repo-agnostic: the commands below teach it how to install/test/boot THIS repo. {file} is substituted with a test file path relative to the repo root.",
 
+  "$trust": "THIS FILE IS SPLIT AT A TRUST BOUNDARY. Whoever opens a pull request writes it, so a PR cannot change the policy it is judged by. POLICY — skipGlobs, workdir, gating, isolation, secrets, timeouts, smoke, crap, deps, drive, judge — is read from felix.config.json at the BASE ref, and a PR's own copy of those fields is ignored entirely (if base omits a block, the built-in default applies; head is never consulted). MECHANICS — language, commands, test — is read from the PR head, so a PR that adds a runner or renames a script is verified with ITS commands. Edit policy the way you edit anything protected: open a PR, get it reviewed, merge it; it applies to PRs opened after it lands.",
+
   "language": "node",
   "workdir": ".",
 
