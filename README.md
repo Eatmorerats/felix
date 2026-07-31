@@ -29,7 +29,8 @@ asked for?"*
    Opt-in: also **boot and drive the app** — HTTP-probe declared routes, a headless
    page-load that catches "200 but blank screen", and **interaction flows** that click and
    assert like a user — see [Driving the app](#driving-the-app-opt-in) and
-   [Interaction flows](#interaction-flows-opt-in).
+   [Interaction flows](#interaction-flows-opt-in). Opt-in **CRAP** flags changed functions
+   that are complex *and* under-tested — see [CRAP](#crap--complex-and-under-tested-changed-functions-opt-in).
 7. **Tier 3 judge** — a **cross-family** LLM (OpenAI **or** Google Gemini — pick
    the vendor with `FELIX_JUDGE_FAMILY`) rules each criterion met/unmet. Felix
    **refuses to run with an Anthropic judge** so the code generator never grades
@@ -197,6 +198,34 @@ fenced on purpose:
 | A malformed flow is a hard **fail**, not a skip | A smoke test that quietly does nothing is worse than none |
 | Browser missing ⇒ soft **skip** | A missing dev tool must never flip a verdict |
 
+### CRAP — complex-and-under-tested changed functions (opt-in)
+
+A suite that's green can still leave a tangled function with no tests behind it — exactly where
+the next regression hides. CRAP (Change Risk Anti-Patterns) is the one signal only a tool that
+*runs* the code can produce: it fuses **real coverage** with **cyclomatic complexity** on the
+functions this PR actually changed.
+
+```
+CRAP(fn) = complexity² · (1 − coverage)³ + complexity
+```
+
+Fully covered ⇒ the score collapses to raw complexity; fully uncovered ⇒ `complexity² +
+complexity` (it explodes). Any changed function scoring over `crap.threshold` (default **30**;
+crap4j convention — Uncle Bob drives to <6) is flagged. When `crap.enabled`, Felix runs the
+suite once more under [`c8`](https://github.com/bcoe/c8) coverage and measures complexity with
+`typhonjs-escomplex` on the changed `.js`/`.mjs`/`.cjs` files.
+
+It is a **soft, advisory** row — it appears in the Tier 1 output and feeds the judge, but it
+**never gates the verdict**. Off by default (the extra coverage run is opt-in). The design rule
+that keeps it honest: **a data problem may only ever reduce the number of flags, never create
+one.** Missing coverage, a parse failure, a path mismatch, or all-zero instrumentation each
+downgrade to a labeled `skip` with a reason — never a false `cov=0` alarm. v1 is JS-only
+(non-JS changed files are listed and skipped) and unsupported under `docker` isolation.
+
+```json
+"crap": { "enabled": true, "threshold": 30 }
+```
+
 ### Secrets scanning
 
 Felix's built-in secrets scan is a **changed-files backstop**, not an authoritative repo
@@ -248,12 +277,19 @@ kill. Stronger isolation (container/VM, egress limits) is a later phase.
 ## Tests
 
 ```bash
-npm test        # 174 offline unit tests, no network
+npm test        # 191 offline unit tests, no network
+npm run test:crap   # end-to-end: real c8 + escomplex prove the CRAP criteria
 npm run test:live   # end-to-end: drives a real browser against a real app (needs Playwright)
 ```
 
 `npm test` covers the pure/deterministic surface (config detection, spec parsing, the verdict
-decision table, secret scanning, drive/page-load/flow grading).
+decision table, secret scanning, the CRAP fusion math, drive/page-load/flow grading).
+
+`npm run test:crap` proves the CRAP check against the *real* toolchain, not mocks: it builds a
+throwaway fixture, runs the actual suite under actual c8 coverage, measures complexity with the
+actual escomplex, and asserts the three falsifiable criteria — an uncovered complexity-7
+function flags with score **56**, the same function fully covered scores **7** (== its
+complexity) and doesn't flag, and with the check disabled no coverage runs and no row appears.
 
 `npm run test:live` proves the *driver* works, which unit tests structurally cannot: it boots a
 real HTTP server with a real form and drives it in a real browser, asserting that a true
