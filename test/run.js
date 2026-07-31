@@ -34,7 +34,7 @@ const {
 const picomatchLib = require('picomatch');
 const { parseTarget } = require('../src/engine/github');
 const { render } = require('../src/engine/comment');
-const { triageFiles, triggerGate, NEVER_SKIP } = require('../src/engine');
+const { triageFiles, triggerGate, NEVER_SKIP, baseConfigFetcher } = require('../src/engine');
 const { resolveIsolation, wrapCommand } = require('../src/engine/isolation');
 const { renderError } = require('../src/engine/comment');
 const { computeMetrics, OUTCOMES } = require('../src/engine/calibration');
@@ -2299,8 +2299,41 @@ atest('an unresolvable base ref is a hard error — it never falls back to head'
   const repoPath = headRepo({ skipGlobs: ['**'], gating: { enabled: false } });
   await assert.rejects(
     () => loadConfig({ repoPath, fetchBaseConfig: baseUnreachable('boom') }),
-    /base/i,
-    'must refuse rather than silently judge the PR by its own policy',
+    /boom/,
+    'the failure must propagate, not be swallowed into head-sourced policy',
+  );
+});
+
+atest('loadConfig refuses outright when no fetchBaseConfig is supplied', async () => {
+  // Guards the seam itself: a future caller that forgets the fetcher must not silently get
+  // head-sourced policy back. There is no default, and no repoPath-only overload.
+  await assert.rejects(() => loadConfig({ repoPath: headRepo(null) }), /base ref/i);
+});
+
+// The refusal message + the trusted-only fallback chain live in the real fetcher, so test it.
+atest('baseConfigFetcher falls back sha → branch tip, and refuses when neither resolves', async () => {
+  const calls = [];
+  const fakeGh = (rootFor) => ({
+    listRootContents: async (o, r, ref) => { calls.push(ref); return rootFor[ref] || null; },
+    getRawFile: async () => '{"gating":{"enabled":true}}',
+  });
+
+  // sha 404s, branch tip resolves and has the file → policy still comes from trusted content.
+  const viaRef = await baseConfigFetcher(fakeGh({ main: [{ name: 'felix.config.json', type: 'file' }] }),
+    'o', 'r', { baseSha: 'deadsha', baseRef: 'main' })();
+  assert.deepStrictEqual(calls, ['deadsha', 'main']);
+  assert.strictEqual(viaRef.present, true);
+  assert.strictEqual(viaRef.ref, 'main');
+
+  // A ref that resolves but has no config → the soft "absent" path, not an error.
+  const absent = await baseConfigFetcher(fakeGh({ main: [{ name: 'README.md', type: 'file' }] }),
+    'o', 'r', { baseSha: 'main' })();
+  assert.deepStrictEqual(absent, { present: false, ref: 'main' });
+
+  // Neither resolves → refuse by name. This is the case that must never reach head.
+  await assert.rejects(
+    () => baseConfigFetcher(fakeGh({}), 'o', 'r', { baseSha: 'x', baseRef: 'y' })(),
+    /base ref[\s\S]*Refusing/,
   );
 });
 
@@ -2327,8 +2360,9 @@ test('every config field the engine reads is in exactly one of POLICY_KEYS / MEC
       const p = path.join(d, e.name);
       if (e.isDirectory()) { walk(p); continue; }
       if (!e.name.endsWith('.js')) continue;
-      // Drop the literal filename first, or "felix.config.json" reads as a field named "json".
-      const src = fs.readFileSync(p, 'utf8').split('felix.config.json').join('');
+      // Drop filename mentions first, or "felix.config.json" / "config.js" in prose read as
+      // fields named "json" / "js". No real config field is named for a file extension.
+      const src = fs.readFileSync(p, 'utf8').replace(/[\w.-]*config\.(js|json|example\.json)\b/gi, '');
       for (const m of src.matchAll(/\bconfig\.([a-zA-Z_$][\w$]*)/g)) seen.add(m[1]);
     }
   };
