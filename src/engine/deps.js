@@ -37,6 +37,12 @@
  * tests open (test/run.js "deps —" block, test/deps-live.js).
  */
 
+// Hoisted deliberately. runDepsCheck runs inside the sandbox, after the untrusted step, so
+// a require() in its body is a node_modules walk over directories the PR could write to —
+// the load the module lock exists to refuse. Both are unconditional here anyway.
+const picomatch = require('picomatch');
+const { logger } = require('./util/logger');
+
 const DEFAULT_DEPS_TIMEOUT_MS = 120000;
 
 // ── path + violation normalization ───────────────────────────────────────────
@@ -428,8 +434,6 @@ async function runDepsCheck({ repoPath, baseSha, headSha, filesAll, config, run,
   const path = require('path');
   const os = require('os');
   const fs = deps.fs || require('fs');
-  const picomatch = require('picomatch');
-  const { logger } = require('./util/logger');
   const runFn = deps.run || run;
   const depsCfg = (config && config.deps) || {};
   const cap = timeoutMs || depsCfg.timeoutMs || DEFAULT_DEPS_TIMEOUT_MS;

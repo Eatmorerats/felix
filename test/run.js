@@ -10,6 +10,8 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const Module = require('module');
+const { createRequire } = Module;
 
 const { detect, merge, validate } = require('../src/engine/config');
 const { extractCriteria, buildSpec, linkedIssueNumbers } = require('../src/engine/spec');
@@ -36,7 +38,10 @@ const { computeMetrics, OUTCOMES } = require('../src/engine/calibration');
 const { resolveGating, gateDecision } = require('../src/engine/gating');
 const { parseRevertedPR, detectRevertedPRs } = require('../src/engine/outcomes');
 const { FIXTURES, oracleJudge, truthOutcome } = require('./calibration-fixtures');
-const { buildDrivePlan, interpretProbe, joinUrl, resolveDrive, interpretPageLoad } = require('../src/engine/drive');
+const { buildDrivePlan, interpretProbe, joinUrl, resolveDrive, interpretPageLoad, loadChromium } = require('../src/engine/drive');
+const {
+  preloadOptional, armModuleLock, disarmModuleLock, isArmed, getSupabaseCreateClient,
+} = require('../src/engine/preload');
 const {
   resolveFlowOpts, normalizeStep, validateFlow, buildFlows, describeStep, interpretFlow,
   resolveValue, runFlows,
@@ -2013,6 +2018,168 @@ test('deps: a copied file does NOT contribute its previous_filename (renamed-onl
 test('deps: a layer named no-circular is rejected (reserved for the injected cycle rule)', () => {
   const { error } = buildForbiddenRules({ layers: [{ name: 'no-circular', from: 'a/**', to: 'b/**' }] }, picomatchLib);
   assert.match(error, /reserved name/);
+});
+
+// ── module lock (S2, F5) ─────────────────────────────────────────────────────
+// Felix runs untrusted PR code at its own UID, in directories it can write. Node
+// resolves a bare require() by walking node_modules UP from the calling file — a walk
+// that passes through the action's own node_modules and $HOME/.node_modules (which is
+// on Module.globalPaths), both runner-writable. So ANY require() evaluated AFTER the
+// untrusted step can load attacker-written code INSIDE the Felix process, which holds
+// GITHUB_TOKEN / OPENAI_API_KEY / SUPABASE_SERVICE_ROLE_KEY. The Docker jail does not
+// help here: it wraps children, and this is the parent.
+//
+// Resolving by absolute path does NOT fix it — the absolute path still points into a
+// directory the same UID can overwrite, and the same shape exists via the DECLARED dep
+// @supabase/supabase-js (log.js, called from finalize() after Tier 1). The invariant
+// that does hold: Felix loads no module for the FIRST time after untrusted code runs.
+//
+// The first test reproduces the attack rather than assuming it — a planted module
+// really does execute in-process. Everything is built with createRequire against a
+// temp dir, so nothing is ever written near the real node_modules.
+console.log('module lock — no first-time require after untrusted code (S2, F5)');
+
+/** Plant <dir>/node_modules/<name>/index.js that records the fact it was executed. */
+function plantModule(dir, name, sentinel) {
+  const modDir = path.join(dir, 'node_modules', name);
+  fs.mkdirSync(modDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(modDir, 'package.json'),
+    JSON.stringify({ name, version: '1.0.0', main: 'index.js' }),
+  );
+  fs.writeFileSync(
+    path.join(modDir, 'index.js'),
+    `require('fs').writeFileSync(${JSON.stringify(sentinel)}, 'executed');\nmodule.exports = { pwned: true };\n`,
+  );
+  return createRequire(path.join(dir, 'caller.js'));
+}
+
+test('a module planted in a resolvable node_modules DOES execute in-process (reproduces S2)', () => {
+  const dir = tmpdir();
+  const sentinel = path.join(dir, 'pwned.txt');
+  const req = plantModule(dir, 'felix-plant-unlocked', sentinel);
+
+  const mod = req('felix-plant-unlocked');
+
+  assert.strictEqual(mod.pwned, true, 'planted module loads while unlocked');
+  assert.ok(fs.existsSync(sentinel), 'planted code EXECUTED in-process — this is the vulnerability');
+});
+
+test('the same plant is refused once the lock is armed', () => {
+  const dir = tmpdir();
+  const sentinel = path.join(dir, 'pwned.txt');
+  const req = plantModule(dir, 'felix-plant-locked', sentinel);
+
+  armModuleLock();
+  try {
+    assert.throws(() => req('felix-plant-locked'), /E_FELIX_LATE_REQUIRE/);
+  } finally {
+    disarmModuleLock();
+  }
+  assert.ok(!fs.existsSync(sentinel), 'planted code must NEVER have executed');
+});
+
+test('builtins still load while armed — tier1.js requires fs mid-run', () => {
+  armModuleLock();
+  try {
+    assert.strictEqual(typeof require('fs').readFileSync, 'function');
+    assert.strictEqual(typeof require('node:os').tmpdir, 'function');
+  } finally {
+    disarmModuleLock();
+  }
+});
+
+test('an already-loaded module still resolves while armed (cache hit, no fresh walk)', () => {
+  require('picomatch'); // loaded at startup by index.js + tier1.js
+  armModuleLock();
+  try {
+    assert.strictEqual(typeof require('picomatch'), 'function');
+  } finally {
+    disarmModuleLock();
+  }
+});
+
+test('preloadOptional caches createClient so log.js needs no late require (F5)', () => {
+  const p = preloadOptional();
+  assert.strictEqual(
+    typeof p.supabaseCreateClient, 'function',
+    '@supabase/supabase-js is a declared dependency — it must preload',
+  );
+  armModuleLock();
+  try {
+    assert.strictEqual(getSupabaseCreateClient(), p.supabaseCreateClient, 'served from cache while armed');
+  } finally {
+    disarmModuleLock();
+  }
+});
+
+test('a missing Playwright stays a soft null while armed — never a throw', () => {
+  preloadOptional();
+  armModuleLock();
+  try {
+    // A missing dev tool must never flip a verdict, so loadChromium degrades to null.
+    assert.doesNotThrow(() => loadChromium());
+  } finally {
+    disarmModuleLock();
+  }
+});
+
+// The two tests above prove the lock works and that Playwright stays optional — but
+// neither would fail if someone restored the lazy `require('playwright')`, because the
+// guard's throw is swallowed by that function's own try/catch and it returns null
+// either way. These two close that: one watches the actual load attempt, the other
+// asserts the invariant structurally across the whole of src/.
+test('loadChromium attempts no fresh require at call time (mutation guard for S2)', () => {
+  preloadOptional();
+  const seen = [];
+  const realLoad = Module._load;
+  Module._load = function spyLoad(request, parent, isMain) {
+    seen.push(request);
+    return realLoad(request, parent, isMain);
+  };
+  try {
+    loadChromium();
+  } finally {
+    Module._load = realLoad;
+  }
+  assert.ok(
+    !seen.some((r) => /^playwright/.test(r)),
+    `loadChromium must read the preloaded handle, not require() at call time; saw: ${seen.join(', ')}`,
+  );
+});
+
+test('no module in src/ lazy-requires a non-builtin (the invariant, structurally)', () => {
+  const srcDir = path.join(__dirname, '..', 'src');
+  const LAZY_REQUIRE = /^\s+.*\brequire\((['"])([^'"]+)\1\)/;
+  const offenders = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { walk(p); continue; }
+      if (!e.name.endsWith('.js')) continue;
+      // preload.js IS the startup loader — its requires are the sanctioned ones.
+      if (p.endsWith(`engine${path.sep}preload.js`)) continue;
+      fs.readFileSync(p, 'utf8').split('\n').forEach((line, i) => {
+        const m = line.match(LAZY_REQUIRE);
+        if (m && !Module.isBuiltin(m[2])) offenders.push(`${path.relative(srcDir, p)}:${i + 1} → ${m[2]}`);
+      });
+    }
+  };
+  walk(srcDir);
+  assert.deepStrictEqual(offenders, [], `lazy require of a non-builtin:\n${offenders.join('\n')}`);
+});
+
+test('arming is idempotent and disarm fully restores resolution', () => {
+  armModuleLock();
+  armModuleLock();
+  assert.strictEqual(isArmed(), true);
+  disarmModuleLock();
+  assert.strictEqual(isArmed(), false);
+
+  const dir = tmpdir();
+  const sentinel = path.join(dir, 'pwned.txt');
+  const req = plantModule(dir, 'felix-plant-restored', sentinel);
+  assert.strictEqual(req('felix-plant-restored').pwned, true, 'disarm restores normal resolution');
 });
 
 // Run the deferred async tests (judge wire-contract) after the sync suite, then tally.

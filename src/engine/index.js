@@ -20,6 +20,7 @@ const { compose, conclusionFor } = require('./verdict');
 const { resolveGating, gateDecision } = require('./gating');
 const { render, renderError } = require('./comment');
 const { logVerdict } = require('./log');
+const { preloadOptional, armModuleLock } = require('./preload');
 
 /** Triage: are all changed files non-behavioral (skipGlobs)? */
 function triageFiles(files, skipGlobs) {
@@ -127,6 +128,15 @@ async function run(opts) {
   // Why the judge did/didn't produce a result — surfaced in the verdict so a
   // null tier3 is diagnosable ("key not set" vs "the OpenAI call failed").
   const judgeStatus = { configured: Boolean(env.OPENAI_API_KEY), error: null, attempted: false, fork: gate.fork };
+  // Everything Felix could ever need is loaded HERE, while the only code that has run
+  // is Felix's own. From the arm() call on, a first-time module load throws — because
+  // every step below this line either executes PR code or runs after code that did,
+  // and a module resolved at that point can be one the PR planted (S2, F5). Arming
+  // before createSandbox rather than before runTier1 is deliberate: `git worktree add`
+  // fires the base repo's post-checkout hook, which is plantable on a persistent runner.
+  preloadOptional();
+  armModuleLock();
+
   try {
     sandbox = await createSandbox({ repoPath, headSha, prNumber: number });
     const cwd = config.workdir && config.workdir !== '.' ? path.join(sandbox.dir, config.workdir) : sandbox.dir;

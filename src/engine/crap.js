@@ -30,6 +30,8 @@
  * the fail-safe table are deliberate, not incidental. Touch with the tests open.
  */
 
+const { getEscomplex, getC8BinPath } = require('./preload');
+
 const DEFAULT_CRAP_THRESHOLD = 30;
 
 // ── patch parsing ────────────────────────────────────────────────────────────
@@ -299,19 +301,16 @@ async function runCrapCheck({ cwd, env, testCmd, files, threshold = DEFAULT_CRAP
   // Resolve the tooling from Felix's OWN install so it works against any target
   // repo without network (Tier 1 runs net-deny) and without the target depending
   // on c8/escomplex itself.
-  let escomplex = deps.escomplex;
-  let c8Bin = deps.c8Bin;
-  try {
-    if (!escomplex) escomplex = require('typhonjs-escomplex');
-    if (!c8Bin) {
-      const c8PkgPath = require.resolve('c8/package.json');
-      const bin = require(c8PkgPath).bin;
-      // npm allows `bin` to be a string (command == package name) or a map.
-      const binRel = typeof bin === 'string' ? bin : bin.c8;
-      c8Bin = path.join(path.dirname(c8PkgPath), binRel);
-    }
-  } catch (e) {
-    return skip(`crap: coverage tooling unavailable (${String(e.message).split('\n')[0]})`);
+  //
+  // Both come from preload.js rather than a require() here. This function runs inside the
+  // sandbox, i.e. AFTER the untrusted step, and a bare require() at that point walks
+  // node_modules directories the PR's own code was able to write to — the exact load the
+  // module lock forbids. They are warmed at startup instead; a null means the tool genuinely
+  // isn't installed, which stays a skip, never a fabricated pass.
+  const escomplex = deps.escomplex || getEscomplex();
+  const c8Bin = deps.c8Bin || getC8BinPath();
+  if (!escomplex || !c8Bin) {
+    return skip(`crap: coverage tooling unavailable (${!escomplex ? 'typhonjs-escomplex' : 'c8'} not installed)`);
   }
 
   // ── coverage pass ──
