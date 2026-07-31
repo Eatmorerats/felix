@@ -1,0 +1,46 @@
+# Felix's own test suite, run on Felix's own pull requests.
+#
+# The repo shipped with no CI at all, which meant the "174 tests pass" claim in the README
+# was a statement about one laptop. A tool whose entire product is "don't trust the diff,
+# run the code" cannot ask that of others and skip it itself.
+#
+# No secrets are used or needed: the suite touches process.env zero times, injects its own
+# fetch and sleep, and makes no network calls. That is deliberate — it means this workflow
+# runs identically on pull requests from forks, where secrets are not available, so an
+# outside contributor gets the same signal a maintainer does.
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to the same PR makes the previous run irrelevant; don't queue behind it.
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor and the current LTS. The floor is what the docs implicitly promise;
+        # testing only the newest hides a syntax or API assumption until someone else finds it.
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: install
+        run: npm ci
+
+      - name: test
+        run: npm test

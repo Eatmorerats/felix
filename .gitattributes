@@ -1,0 +1,5 @@
+# The golden characterization net compares the fixture BYTE-for-byte against what the harness
+# regenerates (which always uses \n). Pin both to LF so git's autocrlf never rewrites the
+# fixture to CRLF on checkout and turns a clean net RED on Windows.
+test/golden-judge.js text eol=lf
+test/fixtures/judge-golden.json text eol=lf
