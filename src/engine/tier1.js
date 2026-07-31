@@ -15,6 +15,7 @@ const { run, tail } = require('./util/exec');
 const { wrapCommand, resolveIsolation } = require('./isolation');
 const { buildDrivePlan, driveApp } = require('./drive');
 const { runCrapCheck } = require('./crap');
+const { runDepsCheck } = require('./deps');
 const { logger } = require('./util/logger');
 
 // Vendor-specific, high-signal secret shapes. A match here has a distinctive prefix
@@ -159,7 +160,7 @@ function changedTestFiles(files, config) {
     .map((f) => f.filename);
 }
 
-async function runTier1({ cwd, env, config, files }) {
+async function runTier1({ cwd, env, config, files, repoPath, baseSha, headSha, filesAll }) {
   const c = config.commands || {};
   const t = config.timeouts || {};
   const isolation = resolveIsolation(config);
@@ -216,6 +217,18 @@ async function runTier1({ cwd, env, config, files }) {
         run, timeoutMs: t.testMs || 600000,
       }));
     }
+  }
+
+  // Dependency-direction check (opt-in, soft/advisory). Gate FIRST so a disabled repo
+  // builds no graph and its verdict stays byte-identical — nothing is pushed here at all.
+  // It cruises pristine base+head worktrees itself (not `cwd`), so no sandbox dir is passed.
+  // filesAll MUST be the FULL changed-file list — no fallback to the behavioral `files`
+  // subset (a filtered list would miss renames and phantom-flag; runDepsCheck SKIPs on absence).
+  if (config.deps && config.deps.enabled) {
+    results.push(await runDepsCheck({
+      repoPath, baseSha, headSha, filesAll, config, run,
+      timeoutMs: config.deps.timeoutMs || 120000,
+    }));
   }
 
   // Drive the running app (R1, opt-in): boot it and probe declared routes. These

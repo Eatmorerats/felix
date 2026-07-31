@@ -133,7 +133,13 @@ async function run(opts) {
 
     // (6) Tier 1.
     logger.step(6, 'running Tier 1 checks');
-    const t1 = await runTier1({ cwd, env: sandbox.cleanEnv, config, files: triage.behavioral });
+    // `files` is the FULL getFiles list (unfiltered by triage) — the deps check needs the
+    // widest set for its rename map + changed-file attribution gate. `triage.behavioral` is
+    // the narrower behavioral subset used for the per-file test re-runs.
+    const t1 = await runTier1({
+      cwd, env: sandbox.cleanEnv, config, files: triage.behavioral,
+      repoPath, baseSha: pr.base.sha, headSha, filesAll: files,
+    });
     tier1 = t1.results;
     installFailed = t1.installFailed;
 

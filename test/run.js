@@ -22,6 +22,11 @@ const {
   parseAddedLines, matchCoverageKey, attributeStatements, functionCoverage, crapScore,
   methodIsChanged, analyzeFileParsed, coverageAllZero, isLikelyGenerated, buildCrapRow,
 } = require('../src/engine/crap');
+const {
+  keyOf, buildRenameMap, mapBaseFn, buildChangedSet, diffViolations,
+  couplingDelta, buildForbiddenRules, renderDcConfig, buildDepsRow,
+} = require('../src/engine/deps');
+const picomatchLib = require('picomatch');
 const { parseTarget } = require('../src/engine/github');
 const { render } = require('../src/engine/comment');
 const { triageFiles, triggerGate } = require('../src/engine');
@@ -1781,6 +1786,233 @@ test('config default: crap is disabled with threshold 30 (opt-in)', () => {
   const u = merge({ commands: { install: 'i', test: 't' } }, { crap: { enabled: true, threshold: 6 } });
   assert.strictEqual(u.crap.enabled, true);
   assert.strictEqual(u.crap.threshold, 6);
+});
+
+console.log('deps — dependency-direction check (Tier 1, opt-in, soft)');
+// dc 18.1.0 cycle shape (probe-confirmed): a 2-node cycle a↔b reports from='a.js',
+// cycle=[{name:'b.js'},{name:'a.js'}]; each rotation carries the FULL member list.
+const cyc = (from, members) => ({ type: 'cycle', from, cycle: members.map((name) => ({ name })) });
+const edge = (rule, from, to) => ({ type: 'dependency', from, to, rule: { name: rule } });
+
+test('deps: cycle key is a sorted SET — same 2-node cycle from either node keys identically', () => {
+  const fromA = cyc('a.js', ['b.js', 'a.js']);   // reported from a
+  const fromB = cyc('b.js', ['a.js', 'b.js']);   // reported from b (rotated)
+  assert.strictEqual(keyOf(fromA), 'cycle:a.js|b.js');
+  assert.strictEqual(keyOf(fromB), 'cycle:a.js|b.js');
+});
+test('deps: 3-node cycle keys identically from every reporting node, and with from IN or OUT of cycle[]', () => {
+  const fromA = keyOf(cyc('a.js', ['b.js', 'c.js', 'a.js']));  // from included in cycle[]
+  const fromB = keyOf(cyc('b.js', ['c.js', 'a.js', 'b.js']));  // rotated
+  const fromAout = keyOf(cyc('a.js', ['b.js', 'c.js']));       // from NOT repeated in cycle[]
+  const dup = keyOf(cyc('a.js', ['a.js', 'b.js', 'c.js', 'a.js'])); // duplicate entries
+  assert.strictEqual(fromA, 'cycle:a.js|b.js|c.js');
+  assert.strictEqual(fromB, 'cycle:a.js|b.js|c.js');
+  assert.strictEqual(fromAout, 'cycle:a.js|b.js|c.js');
+  assert.strictEqual(dup, 'cycle:a.js|b.js|c.js');
+});
+test('deps: edge key includes the rule name (one edge can violate two author rules)', () => {
+  assert.strictEqual(keyOf(edge('engine-no-cli', 'src/engine/x.js', 'bin/felix.js')),
+    'dep:engine-no-cli:src/engine/x.js→bin/felix.js');
+  // Different rule name over the same edge is a DISTINCT finding.
+  assert.notStrictEqual(
+    keyOf(edge('a', 'x.js', 'y.js')), keyOf(edge('b', 'x.js', 'y.js')));
+});
+test('deps: a pure rename keys identically on both sides via mapBase ⇒ no candidate (PASS)', () => {
+  const filesAll = [
+    { status: 'renamed', previous_filename: 'a.js', filename: 'x.js' },
+    { status: 'renamed', previous_filename: 'b.js', filename: 'y.js' },
+  ];
+  const renameMap = buildRenameMap(filesAll);
+  const changedSet = buildChangedSet(filesAll);
+  const { candidates, preExisting } = diffViolations({
+    headViolations: [cyc('x.js', ['y.js', 'x.js'])],   // cycle on the new names
+    baseViolations: [cyc('a.js', ['b.js', 'a.js'])],   // same cycle on the old names
+    renameMap, changedSet,
+  });
+  assert.strictEqual(candidates.length, 0, 'a rename must not manufacture a new cycle');
+  assert.strictEqual(preExisting, 1);
+});
+test('deps: rename + a genuinely new import IS flagged (base truly had no such cycle)', () => {
+  const filesAll = [
+    { status: 'renamed', previous_filename: 'a.js', filename: 'x.js' },
+    { status: 'modified', filename: 'y.js' },
+  ];
+  const { candidates } = diffViolations({
+    headViolations: [cyc('x.js', ['y.js', 'x.js'])],
+    baseViolations: [],                                 // base had NO cycle at all
+    renameMap: buildRenameMap(filesAll), changedSet: buildChangedSet(filesAll),
+  });
+  assert.strictEqual(candidates.length, 1);
+  assert.strictEqual(candidates[0].key, 'cycle:x.js|y.js');
+});
+test('deps: a swap rename (A→B, B→A) rewrites both paths consistently ⇒ PASS', () => {
+  const filesAll = [
+    { status: 'renamed', previous_filename: 'a.js', filename: 'b.js' },
+    { status: 'renamed', previous_filename: 'b.js', filename: 'a.js' },
+  ];
+  const { candidates, preExisting } = diffViolations({
+    headViolations: [cyc('a.js', ['b.js', 'a.js'])],
+    baseViolations: [cyc('a.js', ['b.js', 'a.js'])],
+    renameMap: buildRenameMap(filesAll), changedSet: buildChangedSet(filesAll),
+  });
+  assert.strictEqual(candidates.length, 0);
+  assert.strictEqual(preExisting, 1);
+});
+test('deps: the attribution gate suppresses a phantom that touches NO changed file (rename-map backstop)', () => {
+  // GitHub failed to record a rename, so renameMap is empty and a head cycle looks "new".
+  // But its members are unchanged files ⇒ not attributable to this PR ⇒ suppressed, not flagged.
+  const filesAll = [{ status: 'modified', filename: 'unrelated.js' }];
+  const { candidates, suppressed } = diffViolations({
+    headViolations: [cyc('x.js', ['y.js', 'x.js'])],   // x.js / y.js are NOT in the diff
+    baseViolations: [],
+    renameMap: buildRenameMap(filesAll), changedSet: buildChangedSet(filesAll),
+  });
+  assert.strictEqual(candidates.length, 0, 'a violation touching no changed file must never flag');
+  assert.strictEqual(suppressed.length, 1);
+});
+test('deps: a pre-existing cycle kept by the PR is counted, never re-flagged (base keys are real, not empty)', () => {
+  // The anti-cry-wolf core: base ALREADY has the cycle, head keeps it. The base key set is
+  // populated (the runner SKIPs rather than pass [] on a base failure), so this is preExisting.
+  const filesAll = [{ status: 'modified', filename: 'a.js' }];
+  const { candidates, preExisting } = diffViolations({
+    headViolations: [cyc('a.js', ['b.js', 'a.js'])],
+    baseViolations: [cyc('a.js', ['b.js', 'a.js'])],
+    renameMap: buildRenameMap(filesAll), changedSet: buildChangedSet(filesAll),
+  });
+  assert.strictEqual(candidates.length, 0);
+  assert.strictEqual(preExisting, 1);
+  assert.strictEqual(buildDepsRow({ candidates, preExisting }).status, 'pass');
+});
+test('deps: a repeated cycle from dc dedupes to exactly ONE candidate naming both files (criterion 1 shape)', () => {
+  const filesAll = [{ status: 'added', filename: 'a.js' }, { status: 'modified', filename: 'b.js' }];
+  const { candidates } = diffViolations({
+    headViolations: [cyc('a.js', ['b.js', 'a.js']), cyc('b.js', ['a.js', 'b.js'])], // same cycle twice
+    baseViolations: [],
+    renameMap: buildRenameMap(filesAll), changedSet: buildChangedSet(filesAll),
+  });
+  assert.strictEqual(candidates.length, 1, 'one A↔B cycle must yield exactly one flag');
+  const row = buildDepsRow({ candidates });
+  assert.strictEqual(row.status, 'fail');
+  assert.strictEqual(row.hard, false, 'deps is SOFT — it never gates the verdict');
+  assert.match(row.detail, /advisory/);
+  assert.match(row.detail, /a\.js ↔ b\.js/);           // names BOTH files
+});
+test('deps: a forbidden-edge candidate renders the rule + from→to in the detail', () => {
+  const filesAll = [{ status: 'modified', filename: 'src/engine/x.js' }];
+  const { candidates } = diffViolations({
+    headViolations: [edge('engine-no-cli', 'src/engine/x.js', 'bin/felix.js')],
+    baseViolations: [],
+    renameMap: buildRenameMap(filesAll), changedSet: buildChangedSet(filesAll),
+  });
+  const row = buildDepsRow({ candidates });
+  assert.strictEqual(row.status, 'fail');
+  assert.match(row.detail, /engine-no-cli: src\/engine\/x\.js → bin\/felix\.js/);
+});
+test('deps: buildForbiddenRules always injects no-circular and compiles a valid layer glob', () => {
+  const { rules, error } = buildForbiddenRules(
+    { layers: [{ name: 'engine-no-cli', from: 'src/engine/**', to: 'bin/**' }] }, picomatchLib);
+  assert.ok(!error);
+  assert.strictEqual(rules[0].name, 'no-circular');
+  assert.deepStrictEqual(rules[0].to, { circular: true });
+  assert.strictEqual(rules[1].name, 'engine-no-cli');
+  // The compiled glob source must actually match a nested path under RegExp.test.
+  assert.ok(new RegExp(rules[1].from.path).test('src/engine/util/exec.js'));
+});
+test('deps: an invalid layer is a labeled error (a config typo must not crash Tier 1 or drop a rule)', () => {
+  assert.match(buildForbiddenRules({ layers: [{ from: 'a/**', to: 'b/**' }] }, picomatchLib).error, /missing name/);
+  assert.match(buildForbiddenRules({ layers: [{ name: 'x', to: 'b/**' }] }, picomatchLib).error, /required/);
+  assert.match(buildForbiddenRules({ layers: [{ name: 'x', from: 'a/**', to: 'b/**' }, { name: 'x', from: 'c/**', to: 'd/**' }] }, picomatchLib).error, /duplicate/);
+});
+test('deps: picomatch.makeRe(src/engine/**) matches a nested file under RegExp.test', () => {
+  const re = picomatchLib.makeRe('src/engine/**', { dot: true });
+  assert.ok(re.test('src/engine/util/exec.js'));
+  assert.ok(!re.test('bin/felix.js'));
+});
+test('deps: renderDcConfig always excludes node_modules and is requireable CommonJS', () => {
+  const src = renderDcConfig({ exclude: ['(^|/)dist/'] }, [{ name: 'no-circular', severity: 'error', from: {}, to: { circular: true } }]);
+  assert.match(src, /module\.exports =/);
+  assert.match(src, /node_modules/);
+  assert.match(src, /dist/);
+});
+test('deps: coupling delta reports only |Δfan-in| ≥ 2 on changed modules, tags new files', () => {
+  const headModules = [
+    { source: 'src/hub.js', dependents: [1, 2, 3, 4, 5], dependencies: [1] },  // fan-in 2→5
+    { source: 'src/newfile.js', dependents: [1, 2], dependencies: [] },        // new, fan-in 0→2
+    { source: 'src/quiet.js', dependents: [1], dependencies: [1] },            // Δ0 → omitted
+  ];
+  const baseModules = [
+    { source: 'src/hub.js', dependents: [1, 2], dependencies: [1] },
+    { source: 'src/quiet.js', dependents: [1], dependencies: [1] },
+  ];
+  const changedSet = buildChangedSet([
+    { status: 'modified', filename: 'src/hub.js' },
+    { status: 'added', filename: 'src/newfile.js' },
+    { status: 'modified', filename: 'src/quiet.js' },
+  ]);
+  const lines = couplingDelta({ headModules, baseModules, changedSet, renameMap: new Map() });
+  assert.strictEqual(lines.length, 2);
+  assert.match(lines[0], /src\/hub\.js fan-in 2 → 5 \(\+3\)/);
+  assert.match(lines.join('\n'), /src\/newfile\.js fan-in 0 → 2 \(\+2\).*new file/);
+  assert.ok(!lines.join('\n').includes('quiet.js'), 'a Δ0 module must not be reported');
+});
+test('deps: config.merge fills the deps defaults (disabled) and lets a user enable it', () => {
+  assert.strictEqual(merge({}, {}).deps.enabled, false);
+  assert.deepStrictEqual(merge({}, {}).deps.exclude, ['(^|/)node_modules/']);
+  assert.strictEqual(merge({}, { deps: { enabled: true } }).deps.enabled, true);
+});
+
+test('deps: overlapping cycles in one SCC — removing an edge (improvement) does NOT phantom-flag', () => {
+  // Probe-confirmed on dc 18.1.0: a base SCC {a,b,c} with edges a→b, b→a, b→c, c→a reports TWO
+  // cycle keys — cycle:a.js|b.js and cycle:a.js|b.js|c.js. A PR removing b→a leaves only the
+  // a|b|c cycle on head, and that key is already in baseKeys ⇒ pre-existing, no candidate.
+  const base = [
+    cyc('a.js', ['b.js', 'a.js']),               // key a|b
+    cyc('b.js', ['c.js', 'a.js', 'b.js']),       // key a|b|c
+  ];
+  const head = [cyc('a.js', ['b.js', 'c.js', 'a.js'])]; // key a|b|c only (b→a removed)
+  const filesAll = [{ status: 'modified', filename: 'b.js' }];
+  const { candidates, preExisting } = diffViolations({
+    headViolations: head, baseViolations: base,
+    renameMap: buildRenameMap(filesAll), changedSet: buildChangedSet(filesAll),
+  });
+  assert.strictEqual(candidates.length, 0, 'a structure improvement must never flag');
+  assert.strictEqual(preExisting, 1);
+});
+test('deps: import-order permutation of the same SCC yields the identical key set', () => {
+  const set = (vs) => Array.from(new Set(vs.map((v) => keyOf(v)))).sort();
+  const order1 = set([cyc('a.js', ['b.js', 'a.js']), cyc('b.js', ['c.js', 'a.js', 'b.js'])]);
+  const order2 = set([cyc('b.js', ['c.js', 'a.js', 'b.js']), cyc('a.js', ['b.js', 'a.js'])]);
+  assert.deepStrictEqual(order1, order2);
+  assert.deepStrictEqual(order1, ['cycle:a.js|b.js', 'cycle:a.js|b.js|c.js']);
+});
+test('deps: ESM SCC cycles key with FULL membership (probe-confirmed 5 distinct keys)', () => {
+  // dc 18.1.0 on a 5-node .mjs SCC emits 5 simple cycles, each cycle[] closing back to `from`.
+  const esm = [
+    cyc('a.mjs', ['b.mjs', 'a.mjs']),
+    cyc('a.mjs', ['c.mjs', 'b.mjs', 'a.mjs']),
+    cyc('b.mjs', ['c.mjs', 'b.mjs']),
+    cyc('c.mjs', ['d.mjs', 'e.mjs', 'c.mjs']),
+    cyc('d.mjs', ['e.mjs', 'a.mjs', 'b.mjs', 'c.mjs', 'd.mjs']),
+  ];
+  assert.deepStrictEqual(esm.map((v) => keyOf(v)).sort(), [
+    'cycle:a.mjs|b.mjs',
+    'cycle:a.mjs|b.mjs|c.mjs',
+    'cycle:a.mjs|b.mjs|c.mjs|d.mjs|e.mjs',
+    'cycle:b.mjs|c.mjs',
+    'cycle:c.mjs|d.mjs|e.mjs',
+  ]);
+});
+test('deps: a copied file does NOT contribute its previous_filename (renamed-only attribution)', () => {
+  const filesAll = [{ status: 'copied', filename: 'dst.js', previous_filename: 'src.js' }];
+  const rm = buildRenameMap(filesAll);
+  const cs = buildChangedSet(filesAll);
+  assert.strictEqual(rm.has('src.js'), false, 'a copy is not a rename — no key rewrite');
+  assert.strictEqual(cs.has('src.js'), false, 'the copy source still exists in head — not attributable');
+  assert.strictEqual(cs.has('dst.js'), true);
+});
+test('deps: a layer named no-circular is rejected (reserved for the injected cycle rule)', () => {
+  const { error } = buildForbiddenRules({ layers: [{ name: 'no-circular', from: 'a/**', to: 'b/**' }] }, picomatchLib);
+  assert.match(error, /reserved name/);
 });
 
 // Run the deferred async tests (judge wire-contract) after the sync suite, then tally.
