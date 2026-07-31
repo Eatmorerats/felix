@@ -8,7 +8,7 @@
   },
   "scripts": {
     "felix": "node bin/felix.js",
-    "test": "node test/run.js",
+    "test": "node test/run.js && node test/golden-judge.js",
     "calibrate": "node test/calibrate.js",
     "test:live": "node test/live-flows.js"
   },
