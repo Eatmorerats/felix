@@ -346,7 +346,11 @@ atest('openai judge posts to chat/completions with a bearer key and parses messa
   assert.strictEqual(ff.calls[0].opts.headers.Authorization, 'Bearer sk-test');
   assert.strictEqual(ff.calls[0].body.model, 'gpt-4.1');                       // per-family default
   assert.deepStrictEqual(ff.calls[0].body.response_format, { type: 'json_object' });
-  assert.deepStrictEqual(out, { family: 'openai', model: 'gpt-4.1', adversarial: false, assessment: 'a', criteria: [{ text: 'c', met: true }] });
+  // `reason` is always present now: a solo seat's rulings are projected onto the spec by
+  // alignSingleRulings, so this path emits the same {text, met, reason} shape the jury and
+  // chunk merges have always emitted. It previously echoed the model's array verbatim,
+  // which is what let a silent judge pass. 'met' is the filler when the model gave none.
+  assert.deepStrictEqual(out, { family: 'openai', model: 'gpt-4.1', adversarial: false, assessment: 'a', criteria: [{ text: 'c', met: true, reason: 'met' }] });
 });
 atest('gemini judge sends the key in the x-goog-api-key header (never the URL) and parses candidates parts', async () => {
   const ff = fakeFetch({ candidates: [{ content: { parts: [{ text: '{"assessment":"g","criteria":[{"text":"c","met":false}]}' }] }, finishReason: 'STOP' }] });
@@ -359,7 +363,9 @@ atest('gemini judge sends the key in the x-goog-api-key header (never the URL) a
   assert.ok(!call.url.includes('g-key'), 'the API key must never appear in the URL');
   assert.strictEqual(call.opts.headers['x-goog-api-key'], 'g-key');
   assert.strictEqual(call.body.generationConfig.responseMimeType, 'application/json');
-  assert.deepStrictEqual(out, { family: 'gemini', model: 'gemini-3.6-flash', adversarial: false, assessment: 'g', criteria: [{ text: 'c', met: false }] });
+  // Same projected shape as the openai contract above; '(no reason given)' is the filler on
+  // the not-met branch, so a blocking criterion never reaches a human with an empty reason.
+  assert.deepStrictEqual(out, { family: 'gemini', model: 'gemini-3.6-flash', adversarial: false, assessment: 'g', criteria: [{ text: 'c', met: false, reason: '(no reason given)' }] });
 });
 atest('gemini blocked/non-STOP response throws a clear finishReason error (not a JSON parse error)', async () => {
   const ff = fakeFetch({ candidates: [{ content: { parts: [] }, finishReason: 'SAFETY' }] });

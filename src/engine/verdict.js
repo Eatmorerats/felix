@@ -53,7 +53,11 @@ function compose({ triage, spec, tier1, tier3, installFailed, judgeStatus, trigg
   // 3b. Judge-found unmet criteria block (only when the judge ran).
   let judgedUnmet = [];
   if (tier3 && Array.isArray(tier3.criteria) && tier3.criteria.length) {
-    judgedUnmet = tier3.criteria.filter((c) => c.met === false);
+    // `met !== true`, not `met === false`. This table is the last thing standing between a
+    // model's bytes and a green check, so it counts a criterion as met only where something
+    // said so explicitly. `met === false` let undefined, null, 0 and the string "false" —
+    // every shape a truncated or schema-drifting completion produces — read as met.
+    judgedUnmet = tier3.criteria.filter((c) => c.met !== true);
     for (const c of judgedUnmet) {
       required.push(`Criterion not met: "${c.text}"${c.reason ? ` — ${c.reason}` : ''}`);
     }
