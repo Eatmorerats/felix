@@ -1,11 +1,14 @@
 /**
  * merge.js — reassemble judge verdicts.
  *
- * Two merges live here and they run in OPPOSITE directions on purpose:
+ * Three merges live here, and the first two run in OPPOSITE directions on purpose:
  *   • across CHUNKS (one seat, several passes over a split diff) the merge is closer to OR —
  *     the slices are disjoint pieces of ONE body of evidence (mergeChunkRulings);
  *   • across VENDORS (the jury) the merge is AND — two independent opinions, so agreement
- *     must be earned (mergeJuryResults).
+ *     must be earned (mergeJuryResults);
+ *   • across NOTHING — one seat, one pass — there is still a projection to do, because the
+ *     spec's criteria are the questions and the model's array is only its answers
+ *     (alignSingleRulings). That is the DEFAULT path, so it is the one that matters most.
  * Plus describeCoverage (the honest "how much did we see" line) and two private helpers,
  * findRuling / normText, that locate a judge's ruling for a given criterion. Dependency-free.
  */
@@ -22,6 +25,36 @@ function findRuling(result, criterionText, index) {
   const list = Array.isArray(result.criteria) ? result.criteria : [];
   const target = normText(criterionText);
   return list.find((c) => normText(c.text) === target) || list[index] || null;
+}
+
+/**
+ * alignSingleRulings — project ONE seat's single-pass rulings onto the spec's criteria.
+ *
+ * The third member of the merge family, and the one that was missing. Its two siblings
+ * below both build their answer by mapping over specCriteria, so a criterion the model
+ * never addressed comes back not-met. The single-pass path returned the model's own array
+ * verbatim instead — so an empty, truncated or malformed response contained nothing marked
+ * met:false, and verdict.js read "nothing unmet" as VERIFIED. Single seat + single call is
+ * the DEFAULT configuration, which meant the setup almost everyone runs had the weakest
+ * rule in the codebase.
+ *
+ * Same invariant as its siblings, stated once more because it is the whole product: the
+ * result has exactly one entry per SPEC criterion, `met` is true only where the judge said
+ * so explicitly, and silence is not a pass. `met !== true` rather than `met === false` on
+ * purpose — a model that sends the string "false", or omits the field on a truncated
+ * completion, has not confirmed anything.
+ */
+function alignSingleRulings({ specCriteria = [], result }) {
+  return specCriteria.map((sc, i) => {
+    const ruling = findRuling(result, sc.text, i);
+    if (!ruling) {
+      return { text: sc.text, met: false, reason: 'The judge returned no ruling on this criterion.' };
+    }
+    if (ruling.met !== true) {
+      return { text: sc.text, met: false, reason: ruling.reason || '(no reason given)' };
+    }
+    return { text: sc.text, met: true, reason: ruling.reason || 'met' };
+  });
 }
 
 /**
@@ -178,4 +211,6 @@ function mergeJuryResults({ specCriteria = [], results, failures = [], adversari
   };
 }
 
-module.exports = { chunkVerdict, mergeChunkRulings, mergeJuryResults, describeCoverage };
+module.exports = {
+  chunkVerdict, alignSingleRulings, mergeChunkRulings, mergeJuryResults, describeCoverage,
+};

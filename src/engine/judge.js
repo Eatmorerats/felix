@@ -24,7 +24,9 @@ const { logger } = require('./util/logger');
 const { estimateTokens, planJudgeCalls, paceMs, DEFAULT_MAX_CHUNKS } = require('./budget');
 const { buildPrompt } = require('./prompt');
 const { PROVIDERS } = require('./providers');
-const { mergeChunkRulings, mergeJuryResults, chunkVerdict, describeCoverage } = require('./merge');
+const {
+  alignSingleRulings, mergeChunkRulings, mergeJuryResults, chunkVerdict, describeCoverage,
+} = require('./merge');
 
 const ANTHROPIC_HINTS = [/anthropic/i, /\bclaude\b/i];
 
@@ -251,9 +253,17 @@ function createJudge(env = process.env, { adversarial = false, fetchImpl, sleepI
       });
     }
 
-    // Single pass ⇒ byte-for-byte the previous result shape, so nothing downstream changes
-    // for the ordinary PR that always fitted in one call.
-    if (plan.chunks.length === 1) {
+    // Single pass ⇒ the seat's own rulings, unreconciled. Every CONSUMER of a raw seat
+    // result projects it onto the spec itself — the jury via mergeJuryResults, the solo
+    // judge via alignSingleRulings below — because only the jury can tell the difference
+    // between a vendor that ruled "not met" and one that stayed silent, and it needs that
+    // difference to name the objector. Projecting here would flatten both into a dissent.
+    //
+    // Gate on plan.singlePass, NOT chunks.length: a file bigger than the whole budget packs
+    // into exactly one TRUNCATED chunk, which also satisfies `length === 1`. That took this
+    // return and discarded plan.coverage — half a diff judged, reported as a complete
+    // reading. Partial evidence goes through mergeChunkRulings, which prints what it saw.
+    if (plan.singlePass) {
       return {
         family: seat.family,
         model: seat.model,
@@ -273,10 +283,23 @@ function createJudge(env = process.env, { adversarial = false, fetchImpl, sleepI
     });
   };
 
-  // One configured family ⇒ exactly the previous behavior and result shape.
+  // One configured family — the default, and the path that had no merge step at all. The
+  // jury reconciles its seats against the spec in mergeJuryResults and a chunked seat
+  // reconciles itself in mergeChunkRulings; a lone single-pass seat reconciled against
+  // nothing and its raw array went straight to verdict.js, where an empty one meant
+  // "nothing unmet" and composed to VERIFIED. alignSingleRulings is that missing step, so
+  // all three paths now answer for every criterion in the spec.
+  //
+  // A chunked result has already been reconciled (and carries `coverage`, which this must
+  // not drop), so it passes through untouched.
   if (families.length === 1) {
     return async function judge(input) {
-      return runSeat(active[0], input);
+      const seatResult = await runSeat(active[0], input);
+      if (seatResult.chunked) return seatResult;
+      return {
+        ...seatResult,
+        criteria: alignSingleRulings({ specCriteria: input.criteria || [], result: seatResult }),
+      };
     };
   }
 
@@ -306,6 +329,6 @@ function createJudge(env = process.env, { adversarial = false, fetchImpl, sleepI
 }
 
 module.exports = {
-  createJudge, assertCrossFamily, buildPrompt, mergeJuryResults, mergeChunkRulings,
-  chunkVerdict, describeCoverage, PROVIDERS,
+  createJudge, assertCrossFamily, buildPrompt, alignSingleRulings, mergeJuryResults,
+  mergeChunkRulings, chunkVerdict, describeCoverage, PROVIDERS,
 };

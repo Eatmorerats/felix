@@ -380,12 +380,12 @@ async function build() {
 // ════════════════════════════════════════════════════════════════════════════════════════
 function assertExportContract() {
   const EXPECTED = [
-    'createJudge', 'assertCrossFamily', 'buildPrompt', 'mergeJuryResults',
+    'createJudge', 'assertCrossFamily', 'buildPrompt', 'alignSingleRulings', 'mergeJuryResults',
     'mergeChunkRulings', 'chunkVerdict', 'describeCoverage', 'PROVIDERS',
   ];
   assert.deepStrictEqual(
     Object.keys(judgeMod), EXPECTED,
-    `judge.js must export exactly these 8 keys in this order; got [${Object.keys(judgeMod).join(', ')}]`,
+    `judge.js must export exactly these 9 keys in this order; got [${Object.keys(judgeMod).join(', ')}]`,
   );
   // TODO(after extraction): once src/engine/providers.js exists, additionally assert
   //   require('../src/engine/judge').PROVIDERS === require('../src/engine/providers').PROVIDERS

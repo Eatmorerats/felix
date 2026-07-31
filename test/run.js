@@ -346,7 +346,11 @@ atest('openai judge posts to chat/completions with a bearer key and parses messa
   assert.strictEqual(ff.calls[0].opts.headers.Authorization, 'Bearer sk-test');
   assert.strictEqual(ff.calls[0].body.model, 'gpt-4.1');                       // per-family default
   assert.deepStrictEqual(ff.calls[0].body.response_format, { type: 'json_object' });
-  assert.deepStrictEqual(out, { family: 'openai', model: 'gpt-4.1', adversarial: false, assessment: 'a', criteria: [{ text: 'c', met: true }] });
+  // `reason` is always present now: a solo seat's rulings are projected onto the spec by
+  // alignSingleRulings, so this path emits the same {text, met, reason} shape the jury and
+  // chunk merges have always emitted. It previously echoed the model's array verbatim,
+  // which is what let a silent judge pass. 'met' is the filler when the model gave none.
+  assert.deepStrictEqual(out, { family: 'openai', model: 'gpt-4.1', adversarial: false, assessment: 'a', criteria: [{ text: 'c', met: true, reason: 'met' }] });
 });
 atest('gemini judge sends the key in the x-goog-api-key header (never the URL) and parses candidates parts', async () => {
   const ff = fakeFetch({ candidates: [{ content: { parts: [{ text: '{"assessment":"g","criteria":[{"text":"c","met":false}]}' }] }, finishReason: 'STOP' }] });
@@ -359,7 +363,9 @@ atest('gemini judge sends the key in the x-goog-api-key header (never the URL) a
   assert.ok(!call.url.includes('g-key'), 'the API key must never appear in the URL');
   assert.strictEqual(call.opts.headers['x-goog-api-key'], 'g-key');
   assert.strictEqual(call.body.generationConfig.responseMimeType, 'application/json');
-  assert.deepStrictEqual(out, { family: 'gemini', model: 'gemini-3.6-flash', adversarial: false, assessment: 'g', criteria: [{ text: 'c', met: false }] });
+  // Same projected shape as the openai contract above; '(no reason given)' is the filler on
+  // the not-met branch, so a blocking criterion never reaches a human with an empty reason.
+  assert.deepStrictEqual(out, { family: 'gemini', model: 'gemini-3.6-flash', adversarial: false, assessment: 'g', criteria: [{ text: 'c', met: false, reason: '(no reason given)' }] });
 });
 atest('gemini blocked/non-STOP response throws a clear finishReason error (not a JSON parse error)', async () => {
   const ff = fakeFetch({ candidates: [{ content: { parts: [] }, finishReason: 'SAFETY' }] });
@@ -1065,7 +1071,12 @@ atest('an empty bench (every seat fails) is a hard error, not a pass', async () 
     openai: { ok: false, status: 500, body: 'boom' },
     gemini: { ok: false, status: 500, body: 'boom' },
   });
-  await assert.rejects(createJudge(JURY_ENV, { fetchImpl: ff })(JURY_INPUT), /All 2 jury seat\(s\) failed/);
+  // sleepImpl matters here: a 500 is retryable, so both seats burn the full retry backoff.
+  // Without it this one test spent ~60s of real wall-clock — the whole suite's runtime.
+  await assert.rejects(
+    createJudge(JURY_ENV, { fetchImpl: ff, sleepImpl: noSleep })(JURY_INPUT),
+    /All 2 jury seat\(s\) failed/,
+  );
 });
 
 atest('per-seat models are honored positionally', async () => {
@@ -1340,6 +1351,131 @@ atest('an ordinary PR still makes exactly ONE call with the original boolean sch
   assert.doesNotMatch(prompt, /PART 1 OF/);            // no chunk framing
   assert.doesNotMatch(prompt, /not_shown/);            // no 3-valued schema
   assert.strictEqual(out.chunked, undefined);          // unchanged result shape
+});
+
+// ─── the single-seat silence hole ────────────────────────────────────────────
+// "Silence is never a pass" is the rule mergeJuryResults and mergeChunkRulings both
+// enforce by mapping over the SPEC's criteria. The single-seat, single-call path — the
+// default and documented setup — returned the model's `criteria` array verbatim instead,
+// so a judge that ruled on nothing had nothing with met === false and composed to
+// VERIFIED. These seven cases are the degenerate responses a real model actually emits:
+// a truncated completion, a rate-limited partial retry, a summary instead of an
+// enumeration, a stringified boolean. Each asserts BOTH halves — that the seat's own
+// output is projected onto the spec, AND that the verdict it composes to is NOT VERIFIED.
+// The verdict half is the one that matters; the projection is only how we get there.
+const SILENT_SPEC = [
+  { text: 'adds a POST /login endpoint' },
+  { text: 'rejects a bad password with 401' },
+  { text: 'never logs the password' },
+];
+const SILENT_INPUT = { prTitle: 'p', criteria: SILENT_SPEC, diff: 'd', tier1: [] };
+const silentSpec = { hadRealSpec: true, total: 3, mappedCount: 3, source: 'PR description' };
+
+// Drive the REAL default path: one seat, one call, then the real compose(). Nothing is
+// stubbed between the model's bytes and the verdict.
+async function judgeThenCompose(rawJudgeJson) {
+  const ff = fakeFetch({ choices: [{ message: { content: JSON.stringify(rawJudgeJson) } }] });
+  const tier3 = await createJudge({ OPENAI_API_KEY: 'sk' }, { fetchImpl: ff, sleepImpl: noSleep })(SILENT_INPUT);
+  return { tier3, verdict: compose({ triage: {}, spec: silentSpec, tier1: goodTier1, tier3 }).verdict };
+}
+
+atest('SILENCE 1/7 — an empty criteria array is NOT VERIFIED, not a free pass', async () => {
+  const { tier3, verdict } = await judgeThenCompose({ assessment: 'looks good to me', criteria: [] });
+  assert.strictEqual(tier3.criteria.length, 3, 'the seat must answer for every spec criterion');
+  assert.deepStrictEqual(tier3.criteria.map((c) => c.met), [false, false, false]);
+  assert.strictEqual(verdict, VERDICTS.NOT_VERIFIED);
+});
+
+atest('SILENCE 2/7 — criteria sent as a string ("all good") is NOT VERIFIED', async () => {
+  const { tier3, verdict } = await judgeThenCompose({ assessment: 'a', criteria: 'all good' });
+  assert.strictEqual(tier3.criteria.length, 3);
+  assert.strictEqual(verdict, VERDICTS.NOT_VERIFIED);
+});
+
+atest('SILENCE 3/7 — the criteria field omitted entirely is NOT VERIFIED', async () => {
+  const { tier3, verdict } = await judgeThenCompose({ assessment: 'a' });
+  assert.strictEqual(tier3.criteria.length, 3);
+  assert.strictEqual(verdict, VERDICTS.NOT_VERIFIED);
+});
+
+atest('SILENCE 4/7 — ruling on 1 of 3 criteria does not carry the other 2', async () => {
+  const { tier3, verdict } = await judgeThenCompose({
+    assessment: 'a',
+    criteria: [{ text: 'adds a POST /login endpoint', met: true, reason: 'saw the route' }],
+  });
+  assert.deepStrictEqual(tier3.criteria.map((c) => c.met), [true, false, false]);
+  assert.match(tier3.criteria[1].reason, /no ruling/i, 'the silence must be named, not implied');
+  assert.strictEqual(verdict, VERDICTS.NOT_VERIFIED);
+});
+
+atest('SILENCE 5/7 — a ruling with no `met` field is NOT met', async () => {
+  const { tier3, verdict } = await judgeThenCompose({
+    assessment: 'a',
+    criteria: SILENT_SPEC.map((c) => ({ text: c.text, reason: 'looks fine' })),   // met absent
+  });
+  assert.deepStrictEqual(tier3.criteria.map((c) => c.met), [false, false, false]);
+  assert.strictEqual(verdict, VERDICTS.NOT_VERIFIED);
+});
+
+atest('SILENCE 6/7 — met:"false" as a STRING is not a truthy pass', async () => {
+  const { tier3, verdict } = await judgeThenCompose({
+    assessment: 'a',
+    criteria: SILENT_SPEC.map((c) => ({ text: c.text, met: 'false', reason: 'nope' })),
+  });
+  assert.deepStrictEqual(tier3.criteria.map((c) => c.met), [false, false, false]);
+  assert.strictEqual(verdict, VERDICTS.NOT_VERIFIED);
+});
+
+atest('SILENCE 7/7 — rulings on criteria that are not in the spec cannot satisfy it', async () => {
+  const { tier3, verdict } = await judgeThenCompose({
+    assessment: 'a',
+    criteria: [{ text: 'the code is well formatted', met: true, reason: 'tidy' }],
+  });
+  // Criteria 2 and 3 have no ruling at any position, so they block regardless of what
+  // findRuling's deliberate positional fallback does with the first one.
+  assert.strictEqual(tier3.criteria.length, 3);
+  assert.deepStrictEqual(tier3.criteria.slice(1).map((c) => c.met), [false, false]);
+  assert.strictEqual(verdict, VERDICTS.NOT_VERIFIED);
+});
+
+atest('a genuinely complete single-seat pass is still VERIFIED — the fix must not cry wolf', async () => {
+  const { tier3, verdict } = await judgeThenCompose({
+    assessment: 'all three confirmed',
+    criteria: SILENT_SPEC.map((c) => ({ text: c.text, met: true, reason: 'confirmed in the diff' })),
+  });
+  assert.deepStrictEqual(tier3.criteria.map((c) => c.met), [true, true, true]);
+  assert.match(tier3.criteria[0].reason, /confirmed in the diff/, 'the judge\'s own reason must survive');
+  assert.strictEqual(tier3.chunked, undefined, 'a real single pass is still not a chunked result');
+  assert.strictEqual(verdict, VERDICTS.VERIFIED);
+});
+
+// verdict.js half of the same hole: compose() is fed by more than the single-seat path,
+// so it must not read anything-that-is-not-`true` as met on its own account.
+test('compose treats a non-boolean `met` as unmet, not as a pass', () => {
+  for (const met of [undefined, null, 'false', 0, 'true', 1, {}]) {
+    const v = compose({
+      triage: {}, spec: silentSpec, tier1: goodTier1,
+      tier3: { criteria: [{ text: 'login', met, reason: 'r' }] },
+    });
+    assert.strictEqual(v.verdict, VERDICTS.NOT_VERIFIED, `met: ${JSON.stringify(met)} must not pass`);
+  }
+});
+
+atest('a diff too big to fit takes the chunked path even when it packs into ONE chunk', async () => {
+  // The old gate was chunks.length === 1, which a single oversized file also satisfies —
+  // so a truncated, partially-judged diff returned the single-pass shape and the coverage
+  // record saying so never reached the comment. The honest gate is plan.singlePass.
+  const oneHugeFile = `diff --git a/big.js b/big.js\n--- a/big.js\n+++ b/big.js\n${'+x\n'.repeat(4000)}`;
+  const ff = fakeFetch({ choices: [{ message: { content: JSON.stringify({ assessment: 'a', criteria: SILENT_SPEC.map((c) => ({ text: c.text, verdict: 'met', reason: 'ok' })) }) } }] });
+  const out = await createJudge(
+    { OPENAI_API_KEY: 'sk', FELIX_JUDGE_MAX_PROMPT_TOKENS: '1200' },
+    { fetchImpl: ff, sleepImpl: noSleep },
+  )({ prTitle: 'p', criteria: SILENT_SPEC, diff: oneHugeFile, tier1: [] });
+
+  assert.strictEqual(ff.calls.length, 1, 'this diff must pack into exactly one chunk or the test proves nothing');
+  assert.strictEqual(out.chunked, true, 'a truncated single chunk is NOT a single pass');
+  assert.ok(out.coverage.judgedChars < out.coverage.totalChars, 'coverage must record what was left out');
+  assert.match(out.assessment, /Diff too large for one call/, 'the comment must admit partial coverage');
 });
 
 atest('a "request too large" 429 is NOT retried — waiting cannot shrink the request', async () => {
