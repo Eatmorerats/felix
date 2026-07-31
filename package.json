@@ -8,9 +8,11 @@
   },
   "scripts": {
     "felix": "node bin/felix.js",
-    "test": "node test/run.js",
+    "test": "node test/run.js && node test/golden-judge.js",
     "calibrate": "node test/calibrate.js",
-    "test:live": "node test/live-flows.js"
+    "test:crap": "node test/crap-live.js",
+    "test:live": "node test/live-flows.js",
+    "test:deps": "node test/deps-live.js"
   },
   "keywords": [
     "pr-verification",
@@ -32,7 +34,10 @@
   "type": "commonjs",
   "dependencies": {
     "@supabase/supabase-js": "^2.99.1",
+    "c8": "^12.0.0",
+    "dependency-cruiser": "^18.1.0",
     "dotenv": "^17.3.1",
-    "picomatch": "^4.0.2"
+    "picomatch": "^4.0.2",
+    "typhonjs-escomplex": "^0.1.0"
   }
 }

@@ -45,7 +45,8 @@ let originalLoad = null;
  * has run. Each is independently optional — a missing one must never throw, because
  * a missing dev tool must never flip a verdict.
  *
- * @returns {{playwrightChromium: object|null, supabaseCreateClient: Function|null}}
+ * @returns {{playwrightChromium: object|null, supabaseCreateClient: Function|null,
+ *            escomplex: object|null, c8BinPath: string|null}}
  */
 function preloadOptional() {
   if (cache) return cache;
@@ -68,7 +69,31 @@ function preloadOptional() {
     supabaseCreateClient = null;
   }
 
-  cache = { playwrightChromium, supabaseCreateClient };
+  // The CRAP check's two tools. It is opt-in and runs INSIDE the sandbox, i.e. after the
+  // untrusted step — so resolving these at call time is precisely the walk the lock exists
+  // to forbid. Warmed here instead, on the same terms as the others: independently optional,
+  // never throwing, because a missing dev tool must not flip a verdict.
+  let escomplex = null;
+  try {
+    escomplex = require('typhonjs-escomplex');
+  } catch (_) {
+    escomplex = null;
+  }
+
+  // c8 is resolved for its BIN PATH, not its exports, so the path is what gets cached.
+  let c8BinPath = null;
+  try {
+    const path = require('path');
+    const c8PkgPath = require.resolve('c8/package.json');
+    const { bin } = require(c8PkgPath);
+    // npm allows `bin` to be a string (command == package name) or a map.
+    const binRel = typeof bin === 'string' ? bin : bin.c8;
+    c8BinPath = binRel ? path.join(path.dirname(c8PkgPath), binRel) : null;
+  } catch (_) {
+    c8BinPath = null;
+  }
+
+  cache = { playwrightChromium, supabaseCreateClient, escomplex, c8BinPath };
   return cache;
 }
 
@@ -80,6 +105,16 @@ function getPlaywrightChromium() {
 /** Preloaded `@supabase/supabase-js` `createClient`, or null when absent. */
 function getSupabaseCreateClient() {
   return preloadOptional().supabaseCreateClient;
+}
+
+/** Preloaded `typhonjs-escomplex`, or null when it isn't installed. */
+function getEscomplex() {
+  return preloadOptional().escomplex;
+}
+
+/** Absolute path to the preloaded c8 bin, or null when c8 isn't installed. */
+function getC8BinPath() {
+  return preloadOptional().c8BinPath;
 }
 
 /** Is the lock currently armed? */
@@ -135,6 +170,8 @@ module.exports = {
   preloadOptional,
   getPlaywrightChromium,
   getSupabaseCreateClient,
+  getEscomplex,
+  getC8BinPath,
   armModuleLock,
   disarmModuleLock,
   isArmed,

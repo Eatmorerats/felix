@@ -86,9 +86,27 @@
     "externalScan": ""
   },
 
+  "deps": {
+    "$comment": "Opt-in dependency-direction check (soft/advisory in v1 — it never gates a verdict). When enabled, Felix cruises the import graph of the head AND base commits with dependency-cruiser and flags what the PR NEWLY introduces: a new circular import (a->b->a), or a new edge crossing a forbidden layer you declare below. A violation is reported only when it's absent from the base graph AND touches a changed file, so a pre-existing cycle the PR merely keeps is never re-flagged (no crying wolf). A missing base / cruiser failure / timeout SKIPs with a labeled reason rather than guessing. Default enabled=false, so repos that don't want it build no graph and their verdict is byte-identical.",
+    "enabled": false,
+    "layers": [
+      { "name": "engine-no-cli", "from": "src/engine/**", "to": "bin/**",
+        "comment": "engine code must not reach the CLI entrypoints" }
+    ],
+    "exclude": ["(^|/)node_modules/"],
+    "includeOnly": "",
+    "timeoutMs": 120000
+  },
+
   "judge": {
     "$comment": "Tier 3 cross-family LLM judge. adversarial=true uses a refute-first prompt — the judge must state the strongest reason each criterion is NOT met before deciding, which cuts over-eager 'met' verdicts. Off by default; FELIX_JUDGE_ADVERSARIAL=true is the global/Action equivalent.",
     "adversarial": false
+  },
+
+  "crap": {
+    "$comment": "CRAP (Change Risk Anti-Patterns) — a SOFT, advisory Tier 1 signal that flags CHANGED functions which are both complex and under-tested: CRAP = complexity^2 * (1 - coverage)^3 + complexity. Node/JS only (v1). Enabling it runs your test suite a SECOND time under c8 coverage, so it is OFF by default. threshold is the score above which a function is flagged (crap4j convention is 30; Uncle Bob drives to <6). It NEVER gates the verdict — a data problem (missing coverage, parse failure) always downgrades to a labeled skip, never a false flag.",
+    "enabled": false,
+    "threshold": 30
   },
 
   "timeouts": {

@@ -29,7 +29,8 @@ asked for?"*
    Opt-in: also **boot and drive the app** — HTTP-probe declared routes, a headless
    page-load that catches "200 but blank screen", and **interaction flows** that click and
    assert like a user — see [Driving the app](#driving-the-app-opt-in) and
-   [Interaction flows](#interaction-flows-opt-in).
+   [Interaction flows](#interaction-flows-opt-in). Opt-in **CRAP** flags changed functions
+   that are complex *and* under-tested — see [CRAP](#crap--complex-and-under-tested-changed-functions-opt-in).
 7. **Tier 3 judge** — a **cross-family** LLM (OpenAI **or** Google Gemini — pick
    the vendor with `FELIX_JUDGE_FAMILY`) rules each criterion met/unmet. Felix
    **refuses to run with an Anthropic judge** so the code generator never grades
@@ -197,6 +198,34 @@ fenced on purpose:
 | A malformed flow is a hard **fail**, not a skip | A smoke test that quietly does nothing is worse than none |
 | Browser missing ⇒ soft **skip** | A missing dev tool must never flip a verdict |
 
+### CRAP — complex-and-under-tested changed functions (opt-in)
+
+A suite that's green can still leave a tangled function with no tests behind it — exactly where
+the next regression hides. CRAP (Change Risk Anti-Patterns) is the one signal only a tool that
+*runs* the code can produce: it fuses **real coverage** with **cyclomatic complexity** on the
+functions this PR actually changed.
+
+```
+CRAP(fn) = complexity² · (1 − coverage)³ + complexity
+```
+
+Fully covered ⇒ the score collapses to raw complexity; fully uncovered ⇒ `complexity² +
+complexity` (it explodes). Any changed function scoring over `crap.threshold` (default **30**;
+crap4j convention — Uncle Bob drives to <6) is flagged. When `crap.enabled`, Felix runs the
+suite once more under [`c8`](https://github.com/bcoe/c8) coverage and measures complexity with
+`typhonjs-escomplex` on the changed `.js`/`.mjs`/`.cjs` files.
+
+It is a **soft, advisory** row — it appears in the Tier 1 output and feeds the judge, but it
+**never gates the verdict**. Off by default (the extra coverage run is opt-in). The design rule
+that keeps it honest: **a data problem may only ever reduce the number of flags, never create
+one.** Missing coverage, a parse failure, a path mismatch, or all-zero instrumentation each
+downgrade to a labeled `skip` with a reason — never a false `cov=0` alarm. v1 is JS-only
+(non-JS changed files are listed and skipped) and unsupported under `docker` isolation.
+
+```json
+"crap": { "enabled": true, "threshold": 30 }
+```
+
 ### Secrets scanning
 
 Felix's built-in secrets scan is a **changed-files backstop**, not an authoritative repo
@@ -206,6 +235,43 @@ changed files. For security-sensitive repos, set `secrets.externalScan` to a rea
 own scan to advisory. Use gitleaks, or trufflehog with verification **off** — never live
 verification, which fires network requests using attacker-controlled PR content (SSRF/egress
 risk on untrusted diffs).
+
+### Dependency direction (opt-in)
+
+Building and testing a PR tells you nothing about the *shape* of its import graph. When
+`deps.enabled`, Felix cruises the module graph of the **head** commit and the **base** commit
+with [dependency-cruiser](https://github.com/sverweij/dependency-cruiser) and flags what the PR
+**newly** introduces: a new **circular import** (`a → b → a`), or a new edge that crosses a
+**forbidden layer** you declared (e.g. "the engine must not import from `bin/`"). Both graphs
+are built by the same cruiser, same version, same temp ruleset — so any fidelity gap degrades
+both sides identically and cancels in the diff. A violation is only reported when it is (a)
+absent from the base graph **and** (b) touches a file this PR changed, so a **pre-existing**
+cycle the PR merely keeps is never re-flagged. It is **soft/advisory** in v1 — the row reads
+`FLAG` / `ok` in words (never colour) and it never gates a verdict.
+
+```json
+"deps": {
+  "enabled": true,
+  "layers": [
+    { "name": "engine-no-cli", "from": "src/engine/**", "to": "bin/**",
+      "comment": "engine code must not reach the CLI entrypoints" }
+  ]
+}
+```
+
+`layers` is optional — with just `"enabled": true` you get full cycle detection and nothing
+else. `node_modules` is always excluded; set `includeOnly` (a regex) to scope one package of a
+monorepo. Both commits are cruised from **pristine detached worktrees** (never the just-built
+sandbox), so the head and base graphs stay symmetric and a pre-existing structure never reads as
+new. A missing base/head commit, a cruiser failure, a timeout, or a PR whose file list GitHub
+truncated (>3000 files) **skips** with a labeled reason — a data problem may only ever *reduce*
+the flags, never manufacture one.
+
+v1 detects cycles and forbidden edges via **static relative-import analysis**; because both
+sides are cruised without `node_modules`, a cycle mediated *only* through an installed workspace
+package (a `@scope/pkg` symlink) is not resolved on either side — a deliberate symmetric miss, so
+it under-reports rather than crying wolf. See the `deps` block in
+[`felix.config.example.json`](./felix.config.example.json).
 
 ## Large PRs and rate limits
 
@@ -248,12 +314,19 @@ kill. Stronger isolation (container/VM, egress limits) is a later phase.
 ## Tests
 
 ```bash
-npm test        # 174 offline unit tests, no network
+npm test        # 191 offline unit tests, no network
+npm run test:crap   # end-to-end: real c8 + escomplex prove the CRAP criteria
 npm run test:live   # end-to-end: drives a real browser against a real app (needs Playwright)
 ```
 
 `npm test` covers the pure/deterministic surface (config detection, spec parsing, the verdict
-decision table, secret scanning, drive/page-load/flow grading).
+decision table, secret scanning, the CRAP fusion math, drive/page-load/flow grading).
+
+`npm run test:crap` proves the CRAP check against the *real* toolchain, not mocks: it builds a
+throwaway fixture, runs the actual suite under actual c8 coverage, measures complexity with the
+actual escomplex, and asserts the three falsifiable criteria — an uncovered complexity-7
+function flags with score **56**, the same function fully covered scores **7** (== its
+complexity) and doesn't flag, and with the check disabled no coverage runs and no row appears.
 
 `npm run test:live` proves the *driver* works, which unit tests structurally cannot: it boots a
 real HTTP server with a real form and drives it in a real browser, asserting that a true

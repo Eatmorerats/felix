@@ -13,13 +13,22 @@ const path = require('path');
 const Module = require('module');
 const { createRequire } = Module;
 
-const { detect, merge } = require('../src/engine/config');
+const { detect, merge, validate } = require('../src/engine/config');
 const { extractCriteria, buildSpec, linkedIssueNumbers } = require('../src/engine/spec');
 const { compose, VERDICTS, conclusionFor } = require('../src/engine/verdict');const { assertCrossFamily, buildPrompt, createJudge, mergeChunkRulings, chunkVerdict, PROVIDERS } = require('../src/engine/judge');
 const {
   estimateTokens, tokensToChars, splitDiffByFile, packChunks, planJudgeCalls, paceMs,
 } = require('../src/engine/budget');
 const { scanSecrets, shannonEntropy, looksLikeRealSecret } = require('../src/engine/tier1');
+const {
+  parseAddedLines, matchCoverageKey, attributeStatements, functionCoverage, crapScore,
+  methodIsChanged, analyzeFileParsed, coverageAllZero, isLikelyGenerated, buildCrapRow,
+} = require('../src/engine/crap');
+const {
+  keyOf, buildRenameMap, mapBaseFn, buildChangedSet, diffViolations,
+  couplingDelta, buildForbiddenRules, renderDcConfig, buildDepsRow,
+} = require('../src/engine/deps');
+const picomatchLib = require('picomatch');
 const { parseTarget } = require('../src/engine/github');
 const { render } = require('../src/engine/comment');
 const { triageFiles, triggerGate } = require('../src/engine');
@@ -128,6 +137,82 @@ test('detects a python repo', () => {
   assert.strictEqual(c.language, 'python');
   assert.match(c.commands.test, /pytest/);
 });
+// ─── no `||` in an auto-detected TEST command ────────────────────────────────
+// `||` fires on a non-zero exit and a failing suite is exactly that, so a chained runner
+// list handed real failures to whichever runner exited 0 — on a hard:true check. These
+// pin the rule directly: one runner, chosen from what the repo declares, or nothing.
+const writeRepo = (files) => {
+  const d = tmpdir();
+  for (const [name, body] of Object.entries(files)) {
+    fs.writeFileSync(path.join(d, name), typeof body === 'string' ? body : JSON.stringify(body));
+  }
+  return d;
+};
+
+test('a node repo with no test script runs the ONE runner it declares, never a || chain', () => {
+  const c = detect(writeRepo({ 'package.json': { devDependencies: { jest: '^29' } } }));
+  assert.strictEqual(c.commands.test, 'npx --no-install jest');
+  assert.doesNotMatch(c.commands.test, /\|\|/, 'a failing suite must not fall through to another runner');
+  assert.doesNotMatch(c.commands.testOne, /\|\|/);
+});
+
+test('the declared runner is honored, not a fixed preference order', () => {
+  const mocha = detect(writeRepo({ 'package.json': { devDependencies: { mocha: '^11' } } }));
+  assert.strictEqual(mocha.commands.test, 'npx --no-install mocha');
+  const vitest = detect(writeRepo({ 'package.json': { devDependencies: { vitest: '^2' } } }));
+  assert.strictEqual(vitest.commands.test, 'npx --no-install vitest run');
+});
+
+test('auto-detected npx commands carry --no-install (no registry fetch in the sandbox)', () => {
+  // Bare `npx <pkg>` downloads and executes a package from the registry — inside the
+  // sandbox running untrusted PR code. --no-install makes a missing binary exit 1 instead.
+  const c = detect(writeRepo({ 'package.json': { devDependencies: { vitest: '^2' } } }));
+  for (const cmd of [c.commands.test, c.commands.testOne]) {
+    assert.match(cmd, /npx --no-install /, 'every auto-detected npx call must refuse to install');
+  }
+});
+
+test('a node repo with neither a test script nor a known runner emits NO test command', () => {
+  const c = detect(writeRepo({ 'package.json': { dependencies: { express: '^4' } } }));
+  assert.strictEqual(c.commands.test, '', 'guessing a runner is what produced the false green');
+  const errs = validate(c);
+  assert.strictEqual(errs.length, 1);
+  assert.match(errs[0], /could not detect a test command/);
+});
+
+test('a repo WITH a test script still uses it — the fix must not break the normal case', () => {
+  const c = detect(writeRepo({ 'package.json': { scripts: { test: 'vitest run' }, devDependencies: { vitest: '^2' } } }));
+  assert.strictEqual(c.commands.test, 'npm run test');
+});
+
+test('python: pytest only when the repo evidences it, and never chained', () => {
+  const viaPyproject = detect(writeRepo({ 'pyproject.toml': '[tool.pytest.ini_options]\naddopts = "-ra"\n' }));
+  assert.strictEqual(viaPyproject.commands.test, 'pytest -q');
+  const viaReqs = detect(writeRepo({ 'requirements.txt': 'flask==3.0.0\npytest>=8\n' }));
+  assert.strictEqual(viaReqs.commands.test, 'pytest -q');
+  for (const c of [viaPyproject, viaReqs]) {
+    assert.doesNotMatch(c.commands.test, /\|\|/);
+    assert.doesNotMatch(c.commands.test, /unittest/, 'unittest discovery exits 0 on zero tests');
+  }
+});
+
+test('python with no pytest evidence emits NO test command rather than `python -m unittest`', () => {
+  // Measured: `python -m unittest` discovering zero tests exits 0 (Python 3.14). As the tail
+  // of a || chain that turned every genuine failure into a green hard check.
+  const c = detect(writeRepo({ 'requirements.txt': 'flask==3.0.0\n' }));
+  assert.strictEqual(c.commands.test, '');
+  assert.strictEqual(c.commands.testOne, '');
+  assert.match(validate(c)[0], /could not detect a test command/);
+});
+
+test('install commands may still chain — there `||` is two ways to do one job', () => {
+  // npm ci fails on a stale lockfile and npm install is a correct recovery; if BOTH fail the
+  // non-zero exit is caught as installFailed => INSUFFICIENT. Failure was never the trigger
+  // for the fallback, which is what made the TEST chain unsound.
+  const c = detect(writeRepo({ 'package.json': { scripts: { test: 'x' } }, 'package-lock.json': {} }));
+  assert.strictEqual(c.commands.install, 'npm ci || npm install');
+});
+
 test('returns null for an unknown repo', () => {
   assert.strictEqual(detect(tmpdir()), null);
 });
@@ -351,7 +436,11 @@ atest('openai judge posts to chat/completions with a bearer key and parses messa
   assert.strictEqual(ff.calls[0].opts.headers.Authorization, 'Bearer sk-test');
   assert.strictEqual(ff.calls[0].body.model, 'gpt-4.1');                       // per-family default
   assert.deepStrictEqual(ff.calls[0].body.response_format, { type: 'json_object' });
-  assert.deepStrictEqual(out, { family: 'openai', model: 'gpt-4.1', adversarial: false, assessment: 'a', criteria: [{ text: 'c', met: true }] });
+  // `reason` is always present now: a solo seat's rulings are projected onto the spec by
+  // alignSingleRulings, so this path emits the same {text, met, reason} shape the jury and
+  // chunk merges have always emitted. It previously echoed the model's array verbatim,
+  // which is what let a silent judge pass. 'met' is the filler when the model gave none.
+  assert.deepStrictEqual(out, { family: 'openai', model: 'gpt-4.1', adversarial: false, assessment: 'a', criteria: [{ text: 'c', met: true, reason: 'met' }] });
 });
 atest('gemini judge sends the key in the x-goog-api-key header (never the URL) and parses candidates parts', async () => {
   const ff = fakeFetch({ candidates: [{ content: { parts: [{ text: '{"assessment":"g","criteria":[{"text":"c","met":false}]}' }] }, finishReason: 'STOP' }] });
@@ -364,7 +453,9 @@ atest('gemini judge sends the key in the x-goog-api-key header (never the URL) a
   assert.ok(!call.url.includes('g-key'), 'the API key must never appear in the URL');
   assert.strictEqual(call.opts.headers['x-goog-api-key'], 'g-key');
   assert.strictEqual(call.body.generationConfig.responseMimeType, 'application/json');
-  assert.deepStrictEqual(out, { family: 'gemini', model: 'gemini-3.6-flash', adversarial: false, assessment: 'g', criteria: [{ text: 'c', met: false }] });
+  // Same projected shape as the openai contract above; '(no reason given)' is the filler on
+  // the not-met branch, so a blocking criterion never reaches a human with an empty reason.
+  assert.deepStrictEqual(out, { family: 'gemini', model: 'gemini-3.6-flash', adversarial: false, assessment: 'g', criteria: [{ text: 'c', met: false, reason: '(no reason given)' }] });
 });
 atest('gemini blocked/non-STOP response throws a clear finishReason error (not a JSON parse error)', async () => {
   const ff = fakeFetch({ candidates: [{ content: { parts: [] }, finishReason: 'SAFETY' }] });
@@ -1070,7 +1161,12 @@ atest('an empty bench (every seat fails) is a hard error, not a pass', async () 
     openai: { ok: false, status: 500, body: 'boom' },
     gemini: { ok: false, status: 500, body: 'boom' },
   });
-  await assert.rejects(createJudge(JURY_ENV, { fetchImpl: ff })(JURY_INPUT), /All 2 jury seat\(s\) failed/);
+  // sleepImpl matters here: a 500 is retryable, so both seats burn the full retry backoff.
+  // Without it this one test spent ~60s of real wall-clock — the whole suite's runtime.
+  await assert.rejects(
+    createJudge(JURY_ENV, { fetchImpl: ff, sleepImpl: noSleep })(JURY_INPUT),
+    /All 2 jury seat\(s\) failed/,
+  );
 });
 
 atest('per-seat models are honored positionally', async () => {
@@ -1347,6 +1443,131 @@ atest('an ordinary PR still makes exactly ONE call with the original boolean sch
   assert.strictEqual(out.chunked, undefined);          // unchanged result shape
 });
 
+// ─── the single-seat silence hole ────────────────────────────────────────────
+// "Silence is never a pass" is the rule mergeJuryResults and mergeChunkRulings both
+// enforce by mapping over the SPEC's criteria. The single-seat, single-call path — the
+// default and documented setup — returned the model's `criteria` array verbatim instead,
+// so a judge that ruled on nothing had nothing with met === false and composed to
+// VERIFIED. These seven cases are the degenerate responses a real model actually emits:
+// a truncated completion, a rate-limited partial retry, a summary instead of an
+// enumeration, a stringified boolean. Each asserts BOTH halves — that the seat's own
+// output is projected onto the spec, AND that the verdict it composes to is NOT VERIFIED.
+// The verdict half is the one that matters; the projection is only how we get there.
+const SILENT_SPEC = [
+  { text: 'adds a POST /login endpoint' },
+  { text: 'rejects a bad password with 401' },
+  { text: 'never logs the password' },
+];
+const SILENT_INPUT = { prTitle: 'p', criteria: SILENT_SPEC, diff: 'd', tier1: [] };
+const silentSpec = { hadRealSpec: true, total: 3, mappedCount: 3, source: 'PR description' };
+
+// Drive the REAL default path: one seat, one call, then the real compose(). Nothing is
+// stubbed between the model's bytes and the verdict.
+async function judgeThenCompose(rawJudgeJson) {
+  const ff = fakeFetch({ choices: [{ message: { content: JSON.stringify(rawJudgeJson) } }] });
+  const tier3 = await createJudge({ OPENAI_API_KEY: 'sk' }, { fetchImpl: ff, sleepImpl: noSleep })(SILENT_INPUT);
+  return { tier3, verdict: compose({ triage: {}, spec: silentSpec, tier1: goodTier1, tier3 }).verdict };
+}
+
+atest('SILENCE 1/7 — an empty criteria array is NOT VERIFIED, not a free pass', async () => {
+  const { tier3, verdict } = await judgeThenCompose({ assessment: 'looks good to me', criteria: [] });
+  assert.strictEqual(tier3.criteria.length, 3, 'the seat must answer for every spec criterion');
+  assert.deepStrictEqual(tier3.criteria.map((c) => c.met), [false, false, false]);
+  assert.strictEqual(verdict, VERDICTS.NOT_VERIFIED);
+});
+
+atest('SILENCE 2/7 — criteria sent as a string ("all good") is NOT VERIFIED', async () => {
+  const { tier3, verdict } = await judgeThenCompose({ assessment: 'a', criteria: 'all good' });
+  assert.strictEqual(tier3.criteria.length, 3);
+  assert.strictEqual(verdict, VERDICTS.NOT_VERIFIED);
+});
+
+atest('SILENCE 3/7 — the criteria field omitted entirely is NOT VERIFIED', async () => {
+  const { tier3, verdict } = await judgeThenCompose({ assessment: 'a' });
+  assert.strictEqual(tier3.criteria.length, 3);
+  assert.strictEqual(verdict, VERDICTS.NOT_VERIFIED);
+});
+
+atest('SILENCE 4/7 — ruling on 1 of 3 criteria does not carry the other 2', async () => {
+  const { tier3, verdict } = await judgeThenCompose({
+    assessment: 'a',
+    criteria: [{ text: 'adds a POST /login endpoint', met: true, reason: 'saw the route' }],
+  });
+  assert.deepStrictEqual(tier3.criteria.map((c) => c.met), [true, false, false]);
+  assert.match(tier3.criteria[1].reason, /no ruling/i, 'the silence must be named, not implied');
+  assert.strictEqual(verdict, VERDICTS.NOT_VERIFIED);
+});
+
+atest('SILENCE 5/7 — a ruling with no `met` field is NOT met', async () => {
+  const { tier3, verdict } = await judgeThenCompose({
+    assessment: 'a',
+    criteria: SILENT_SPEC.map((c) => ({ text: c.text, reason: 'looks fine' })),   // met absent
+  });
+  assert.deepStrictEqual(tier3.criteria.map((c) => c.met), [false, false, false]);
+  assert.strictEqual(verdict, VERDICTS.NOT_VERIFIED);
+});
+
+atest('SILENCE 6/7 — met:"false" as a STRING is not a truthy pass', async () => {
+  const { tier3, verdict } = await judgeThenCompose({
+    assessment: 'a',
+    criteria: SILENT_SPEC.map((c) => ({ text: c.text, met: 'false', reason: 'nope' })),
+  });
+  assert.deepStrictEqual(tier3.criteria.map((c) => c.met), [false, false, false]);
+  assert.strictEqual(verdict, VERDICTS.NOT_VERIFIED);
+});
+
+atest('SILENCE 7/7 — rulings on criteria that are not in the spec cannot satisfy it', async () => {
+  const { tier3, verdict } = await judgeThenCompose({
+    assessment: 'a',
+    criteria: [{ text: 'the code is well formatted', met: true, reason: 'tidy' }],
+  });
+  // Criteria 2 and 3 have no ruling at any position, so they block regardless of what
+  // findRuling's deliberate positional fallback does with the first one.
+  assert.strictEqual(tier3.criteria.length, 3);
+  assert.deepStrictEqual(tier3.criteria.slice(1).map((c) => c.met), [false, false]);
+  assert.strictEqual(verdict, VERDICTS.NOT_VERIFIED);
+});
+
+atest('a genuinely complete single-seat pass is still VERIFIED — the fix must not cry wolf', async () => {
+  const { tier3, verdict } = await judgeThenCompose({
+    assessment: 'all three confirmed',
+    criteria: SILENT_SPEC.map((c) => ({ text: c.text, met: true, reason: 'confirmed in the diff' })),
+  });
+  assert.deepStrictEqual(tier3.criteria.map((c) => c.met), [true, true, true]);
+  assert.match(tier3.criteria[0].reason, /confirmed in the diff/, 'the judge\'s own reason must survive');
+  assert.strictEqual(tier3.chunked, undefined, 'a real single pass is still not a chunked result');
+  assert.strictEqual(verdict, VERDICTS.VERIFIED);
+});
+
+// verdict.js half of the same hole: compose() is fed by more than the single-seat path,
+// so it must not read anything-that-is-not-`true` as met on its own account.
+test('compose treats a non-boolean `met` as unmet, not as a pass', () => {
+  for (const met of [undefined, null, 'false', 0, 'true', 1, {}]) {
+    const v = compose({
+      triage: {}, spec: silentSpec, tier1: goodTier1,
+      tier3: { criteria: [{ text: 'login', met, reason: 'r' }] },
+    });
+    assert.strictEqual(v.verdict, VERDICTS.NOT_VERIFIED, `met: ${JSON.stringify(met)} must not pass`);
+  }
+});
+
+atest('a diff too big to fit takes the chunked path even when it packs into ONE chunk', async () => {
+  // The old gate was chunks.length === 1, which a single oversized file also satisfies —
+  // so a truncated, partially-judged diff returned the single-pass shape and the coverage
+  // record saying so never reached the comment. The honest gate is plan.singlePass.
+  const oneHugeFile = `diff --git a/big.js b/big.js\n--- a/big.js\n+++ b/big.js\n${'+x\n'.repeat(4000)}`;
+  const ff = fakeFetch({ choices: [{ message: { content: JSON.stringify({ assessment: 'a', criteria: SILENT_SPEC.map((c) => ({ text: c.text, verdict: 'met', reason: 'ok' })) }) } }] });
+  const out = await createJudge(
+    { OPENAI_API_KEY: 'sk', FELIX_JUDGE_MAX_PROMPT_TOKENS: '1200' },
+    { fetchImpl: ff, sleepImpl: noSleep },
+  )({ prTitle: 'p', criteria: SILENT_SPEC, diff: oneHugeFile, tier1: [] });
+
+  assert.strictEqual(ff.calls.length, 1, 'this diff must pack into exactly one chunk or the test proves nothing');
+  assert.strictEqual(out.chunked, true, 'a truncated single chunk is NOT a single pass');
+  assert.ok(out.coverage.judgedChars < out.coverage.totalChars, 'coverage must record what was left out');
+  assert.match(out.assessment, /Diff too large for one call/, 'the comment must admit partial coverage');
+});
+
 atest('a "request too large" 429 is NOT retried — waiting cannot shrink the request', async () => {
   const ff = fakeFetch(
     'Request too large for gpt-4.1 on tokens per min (TPM): Limit 30000, Requested 61227',
@@ -1441,6 +1662,362 @@ atest('the two-vendor jury still requires unanimity when one seat had to chunk',
 
   assert.strictEqual(out.criteria[0].met, false, 'one dissent must still block');
   assert.match(out.criteria[0].reason, /Split verdict/);
+});
+
+console.log('crap — the fusion math (where a wrong check LIES)');
+test('crapScore: fully covered collapses to raw complexity, exactly', () => {
+  // The boundary criterion 2 depends on: covered==total ⇒ score === comp with no float dust.
+  for (const comp of [1, 5, 7, 12, 30]) {
+    assert.strictEqual(crapScore(comp, 5, 5), comp, `comp ${comp} fully covered → ${comp}`);
+  }
+  assert.strictEqual(crapScore(7, 0, 0), 7, 'zero-statement function ⇒ comp, no divide-by-zero');
+});
+test('crapScore: fully uncovered explodes to comp² + comp', () => {
+  assert.strictEqual(crapScore(7, 0, 9), 56, 'comp 7 uncovered → 49 + 7 = 56');
+  assert.strictEqual(crapScore(5, 0, 3), 30, 'comp 5 uncovered → 25 + 5 = 30 (the boundary)');
+  assert.strictEqual(crapScore(6, 0, 4), 42, 'comp 6 uncovered → 36 + 6 = 42');
+});
+test('crapScore: the comparator is strict > (comp-5-uncovered lands ON 30, not over)', () => {
+  const threshold = 30;
+  assert.strictEqual(crapScore(5, 0, 3) > threshold, false, 'exactly 30 is NOT flagged (strict >)');
+  assert.strictEqual(crapScore(7, 0, 9) > threshold, true, '56 is flagged');
+});
+test('crapScore: partial coverage sits between the extremes', () => {
+  // comp 10, half covered: 100·(0.5)³ + 10 = 12.5 + 10 = 22.5
+  assert.strictEqual(crapScore(10, 5, 10), 22.5);
+});
+test('functionCoverage: a HOT statement counts once, not by hit-count (the count-vs-boolean lie)', () => {
+  // The classic lying bug: summing s[] lets one 5000-hit line mask an uncovered function.
+  const s = { 0: 5000, 1: 0, 2: 0, 3: 0 };
+  const cov = functionCoverage(['0', '1', '2', '3'], s);
+  assert.strictEqual(cov.covered, 1, 'exactly one statement ran');
+  assert.strictEqual(cov.total, 4);
+  // ⇒ frac 0.25, not 0.9998 — the function correctly reads as mostly uncovered.
+  assert.ok(crapScore(8, cov.covered, cov.total) > 30, 'a barely-covered complex fn still flags');
+});
+test('attributeStatements: innermost wins — an uncovered inline callback does NOT drag the outer down', () => {
+  // outer spans 1–8; a nested arrow spans line 3. A statement on line 3 belongs to the
+  // arrow, not outer — so outer stays fully covered even though the callback never ran.
+  const methods = [
+    { name: 'outer', lineStart: 1, lineEnd: 8, cyclomatic: 3 },
+    { name: '<anon method-1>', lineStart: 3, lineEnd: 3, cyclomatic: 1 },
+  ];
+  const statementMap = { 0: { start: { line: 2 } }, 1: { start: { line: 3 } }, 2: { start: { line: 5 } } };
+  const attr = attributeStatements(methods, statementMap);
+  assert.deepStrictEqual(attr.get(0), ['0', '2'], 'outer owns lines 2 and 5, NOT 3');
+  assert.deepStrictEqual(attr.get(1), ['1'], 'the arrow owns line 3');
+});
+test('attributeStatements: an exact-span tie drops the statement (fails toward silence)', () => {
+  const methods = [
+    { name: 'a', lineStart: 1, lineEnd: 3, cyclomatic: 1 },
+    { name: 'b', lineStart: 1, lineEnd: 3, cyclomatic: 1 },
+  ];
+  const attr = attributeStatements(methods, { 0: { start: { line: 2 } } });
+  assert.deepStrictEqual(attr.get(0), [], 'neither method claims the tied statement');
+  assert.deepStrictEqual(attr.get(1), []);
+});
+test('parseAddedLines: only + lines count; deletions do not advance, context does', () => {
+  const patch = [
+    '@@ -10,3 +10,4 @@',
+    ' context',   // line 10
+    '-old removed',
+    '+added A',    // line 11
+    '+added B',    // line 12
+    ' context2',   // line 13
+    '\\ No newline at end of file',
+  ].join('\n');
+  const added = parseAddedLines(patch);
+  assert.deepStrictEqual([...added].sort((a, b) => a - b), [11, 12]);
+});
+test('parseAddedLines: empty / missing patch ⇒ empty set (no throw)', () => {
+  assert.strictEqual(parseAddedLines('').size, 0);
+  assert.strictEqual(parseAddedLines(undefined).size, 0);
+});
+test('methodIsChanged: any single added line within the span is enough', () => {
+  const m = { lineStart: 40, lineEnd: 60 };
+  assert.strictEqual(methodIsChanged(m, new Set([9999, 55])), true);
+  assert.strictEqual(methodIsChanged(m, new Set([10, 61])), false);
+});
+test('matchCoverageKey: Windows backslash keys match a POSIX rel path (0/1/2 cases)', () => {
+  const keys = ['C:\\r\\src\\engine\\tier1.js', 'C:\\r\\src\\engine\\crap.js'];
+  assert.strictEqual(matchCoverageKey(keys, 'src/engine/tier1.js').key, keys[0]);
+  assert.ok(matchCoverageKey(keys, 'src/engine/missing.js').skip, 'no match ⇒ skip, never cov=0');
+  const dup = ['C:\\a\\src\\x.js', 'C:\\a\\dist\\src\\x.js'];
+  assert.ok(matchCoverageKey(dup, 'src/x.js').skip, 'ambiguous ⇒ skip');
+});
+test('coverageAllZero: true only when nothing anywhere ran (the worst lie: mass false alarm)', () => {
+  assert.strictEqual(coverageAllZero({ 'a.js': { s: { 0: 0, 1: 0 } }, 'b.js': { s: { 0: 0 } } }), true);
+  assert.strictEqual(coverageAllZero({ 'a.js': { s: { 0: 0 } }, 'b.js': { s: { 0: 1 } } }), false);
+});
+test('isLikelyGenerated: a >2000-char line trips the minified guard', () => {
+  assert.strictEqual(isLikelyGenerated('const x = 1;\n' + 'a'.repeat(2500)), true);
+  assert.strictEqual(isLikelyGenerated('const x = 1;\nconst y = 2;'), false);
+});
+test('analyzeFileParsed: criterion 1 & 2 from synthetic data (uncovered flags 56, covered scores 7)', () => {
+  const methods = [{ name: 'riskScore', lineStart: 1, lineEnd: 9, cyclomatic: 7 }];
+  const statementMap = {}; const s = {};
+  for (let i = 0; i < 7; i++) { statementMap[i] = { start: { line: 2 + i } }; s[i] = 0; } // uncovered
+  const added = new Set([1, 2, 3, 4, 5]);
+  const un = analyzeFileParsed({ relPath: 'r.js', methods, statementMap, s, addedLines: added, threshold: 30 });
+  assert.strictEqual(un[0].score, 56); assert.strictEqual(un[0].flagged, true); assert.strictEqual(un[0].name, 'riskScore');
+  const s2 = {}; for (let i = 0; i < 7; i++) s2[i] = 1; // fully covered
+  const cov = analyzeFileParsed({ relPath: 'r.js', methods, statementMap, s: s2, addedLines: added, threshold: 30 });
+  assert.strictEqual(cov[0].score, 7); assert.strictEqual(cov[0].score, cov[0].complexity); assert.strictEqual(cov[0].flagged, false);
+});
+test('analyzeFileParsed: an UNCHANGED complex+uncovered function is not scored', () => {
+  const methods = [{ name: 'far', lineStart: 100, lineEnd: 130, cyclomatic: 12 }];
+  const rows = analyzeFileParsed({ relPath: 'r.js', methods, statementMap: {}, s: {}, addedLines: new Set([1, 2]), threshold: 30 });
+  assert.strictEqual(rows.length, 0, 'CRAP only speaks to functions the PR touched');
+});
+test('buildCrapRow: flagged ⇒ soft fail; clean ⇒ pass; nothing ⇒ skip; rows sort worst-first', () => {
+  const flagged = buildCrapRow({ rows: [
+    { file: 'a.js', name: 'lo', lineStart: 1, complexity: 2, covered: 0, total: 3, covPct: 0, score: 6, flagged: false },
+    { file: 'a.js', name: 'hi', lineStart: 9, complexity: 8, covered: 0, total: 5, covPct: 0, score: 72, flagged: true },
+  ], skips: [], threshold: 30 });
+  assert.strictEqual(flagged.status, 'fail');
+  assert.strictEqual(flagged.hard, false, 'ALWAYS soft — never gates');
+  assert.ok(flagged.output.indexOf('hi') < flagged.output.indexOf('lo'), 'worst function listed first');
+  const clean = buildCrapRow({ rows: [{ file: 'a.js', name: 'ok', lineStart: 1, complexity: 3, covered: 3, total: 3, covPct: 100, score: 3, flagged: false }], skips: [], threshold: 30 });
+  assert.strictEqual(clean.status, 'pass');
+  const empty = buildCrapRow({ rows: [], skips: ['x.js: complexity parse failed'], threshold: 30 });
+  assert.strictEqual(empty.status, 'skip');
+  assert.match(empty.output, /complexity parse failed/, 'skip reasons are surfaced, not hidden');
+});
+test('config default: crap is disabled with threshold 30 (opt-in)', () => {
+  const c = merge({ commands: { install: 'i', test: 't' } }, null);
+  assert.strictEqual(c.crap.enabled, false);
+  assert.strictEqual(c.crap.threshold, 30);
+  // A user can enable it and set a stricter threshold.
+  const u = merge({ commands: { install: 'i', test: 't' } }, { crap: { enabled: true, threshold: 6 } });
+  assert.strictEqual(u.crap.enabled, true);
+  assert.strictEqual(u.crap.threshold, 6);
+});
+
+console.log('deps — dependency-direction check (Tier 1, opt-in, soft)');
+// dc 18.1.0 cycle shape (probe-confirmed): a 2-node cycle a↔b reports from='a.js',
+// cycle=[{name:'b.js'},{name:'a.js'}]; each rotation carries the FULL member list.
+const cyc = (from, members) => ({ type: 'cycle', from, cycle: members.map((name) => ({ name })) });
+const edge = (rule, from, to) => ({ type: 'dependency', from, to, rule: { name: rule } });
+
+test('deps: cycle key is a sorted SET — same 2-node cycle from either node keys identically', () => {
+  const fromA = cyc('a.js', ['b.js', 'a.js']);   // reported from a
+  const fromB = cyc('b.js', ['a.js', 'b.js']);   // reported from b (rotated)
+  assert.strictEqual(keyOf(fromA), 'cycle:a.js|b.js');
+  assert.strictEqual(keyOf(fromB), 'cycle:a.js|b.js');
+});
+test('deps: 3-node cycle keys identically from every reporting node, and with from IN or OUT of cycle[]', () => {
+  const fromA = keyOf(cyc('a.js', ['b.js', 'c.js', 'a.js']));  // from included in cycle[]
+  const fromB = keyOf(cyc('b.js', ['c.js', 'a.js', 'b.js']));  // rotated
+  const fromAout = keyOf(cyc('a.js', ['b.js', 'c.js']));       // from NOT repeated in cycle[]
+  const dup = keyOf(cyc('a.js', ['a.js', 'b.js', 'c.js', 'a.js'])); // duplicate entries
+  assert.strictEqual(fromA, 'cycle:a.js|b.js|c.js');
+  assert.strictEqual(fromB, 'cycle:a.js|b.js|c.js');
+  assert.strictEqual(fromAout, 'cycle:a.js|b.js|c.js');
+  assert.strictEqual(dup, 'cycle:a.js|b.js|c.js');
+});
+test('deps: edge key includes the rule name (one edge can violate two author rules)', () => {
+  assert.strictEqual(keyOf(edge('engine-no-cli', 'src/engine/x.js', 'bin/felix.js')),
+    'dep:engine-no-cli:src/engine/x.js→bin/felix.js');
+  // Different rule name over the same edge is a DISTINCT finding.
+  assert.notStrictEqual(
+    keyOf(edge('a', 'x.js', 'y.js')), keyOf(edge('b', 'x.js', 'y.js')));
+});
+test('deps: a pure rename keys identically on both sides via mapBase ⇒ no candidate (PASS)', () => {
+  const filesAll = [
+    { status: 'renamed', previous_filename: 'a.js', filename: 'x.js' },
+    { status: 'renamed', previous_filename: 'b.js', filename: 'y.js' },
+  ];
+  const renameMap = buildRenameMap(filesAll);
+  const changedSet = buildChangedSet(filesAll);
+  const { candidates, preExisting } = diffViolations({
+    headViolations: [cyc('x.js', ['y.js', 'x.js'])],   // cycle on the new names
+    baseViolations: [cyc('a.js', ['b.js', 'a.js'])],   // same cycle on the old names
+    renameMap, changedSet,
+  });
+  assert.strictEqual(candidates.length, 0, 'a rename must not manufacture a new cycle');
+  assert.strictEqual(preExisting, 1);
+});
+test('deps: rename + a genuinely new import IS flagged (base truly had no such cycle)', () => {
+  const filesAll = [
+    { status: 'renamed', previous_filename: 'a.js', filename: 'x.js' },
+    { status: 'modified', filename: 'y.js' },
+  ];
+  const { candidates } = diffViolations({
+    headViolations: [cyc('x.js', ['y.js', 'x.js'])],
+    baseViolations: [],                                 // base had NO cycle at all
+    renameMap: buildRenameMap(filesAll), changedSet: buildChangedSet(filesAll),
+  });
+  assert.strictEqual(candidates.length, 1);
+  assert.strictEqual(candidates[0].key, 'cycle:x.js|y.js');
+});
+test('deps: a swap rename (A→B, B→A) rewrites both paths consistently ⇒ PASS', () => {
+  const filesAll = [
+    { status: 'renamed', previous_filename: 'a.js', filename: 'b.js' },
+    { status: 'renamed', previous_filename: 'b.js', filename: 'a.js' },
+  ];
+  const { candidates, preExisting } = diffViolations({
+    headViolations: [cyc('a.js', ['b.js', 'a.js'])],
+    baseViolations: [cyc('a.js', ['b.js', 'a.js'])],
+    renameMap: buildRenameMap(filesAll), changedSet: buildChangedSet(filesAll),
+  });
+  assert.strictEqual(candidates.length, 0);
+  assert.strictEqual(preExisting, 1);
+});
+test('deps: the attribution gate suppresses a phantom that touches NO changed file (rename-map backstop)', () => {
+  // GitHub failed to record a rename, so renameMap is empty and a head cycle looks "new".
+  // But its members are unchanged files ⇒ not attributable to this PR ⇒ suppressed, not flagged.
+  const filesAll = [{ status: 'modified', filename: 'unrelated.js' }];
+  const { candidates, suppressed } = diffViolations({
+    headViolations: [cyc('x.js', ['y.js', 'x.js'])],   // x.js / y.js are NOT in the diff
+    baseViolations: [],
+    renameMap: buildRenameMap(filesAll), changedSet: buildChangedSet(filesAll),
+  });
+  assert.strictEqual(candidates.length, 0, 'a violation touching no changed file must never flag');
+  assert.strictEqual(suppressed.length, 1);
+});
+test('deps: a pre-existing cycle kept by the PR is counted, never re-flagged (base keys are real, not empty)', () => {
+  // The anti-cry-wolf core: base ALREADY has the cycle, head keeps it. The base key set is
+  // populated (the runner SKIPs rather than pass [] on a base failure), so this is preExisting.
+  const filesAll = [{ status: 'modified', filename: 'a.js' }];
+  const { candidates, preExisting } = diffViolations({
+    headViolations: [cyc('a.js', ['b.js', 'a.js'])],
+    baseViolations: [cyc('a.js', ['b.js', 'a.js'])],
+    renameMap: buildRenameMap(filesAll), changedSet: buildChangedSet(filesAll),
+  });
+  assert.strictEqual(candidates.length, 0);
+  assert.strictEqual(preExisting, 1);
+  assert.strictEqual(buildDepsRow({ candidates, preExisting }).status, 'pass');
+});
+test('deps: a repeated cycle from dc dedupes to exactly ONE candidate naming both files (criterion 1 shape)', () => {
+  const filesAll = [{ status: 'added', filename: 'a.js' }, { status: 'modified', filename: 'b.js' }];
+  const { candidates } = diffViolations({
+    headViolations: [cyc('a.js', ['b.js', 'a.js']), cyc('b.js', ['a.js', 'b.js'])], // same cycle twice
+    baseViolations: [],
+    renameMap: buildRenameMap(filesAll), changedSet: buildChangedSet(filesAll),
+  });
+  assert.strictEqual(candidates.length, 1, 'one A↔B cycle must yield exactly one flag');
+  const row = buildDepsRow({ candidates });
+  assert.strictEqual(row.status, 'fail');
+  assert.strictEqual(row.hard, false, 'deps is SOFT — it never gates the verdict');
+  assert.match(row.detail, /advisory/);
+  assert.match(row.detail, /a\.js ↔ b\.js/);           // names BOTH files
+});
+test('deps: a forbidden-edge candidate renders the rule + from→to in the detail', () => {
+  const filesAll = [{ status: 'modified', filename: 'src/engine/x.js' }];
+  const { candidates } = diffViolations({
+    headViolations: [edge('engine-no-cli', 'src/engine/x.js', 'bin/felix.js')],
+    baseViolations: [],
+    renameMap: buildRenameMap(filesAll), changedSet: buildChangedSet(filesAll),
+  });
+  const row = buildDepsRow({ candidates });
+  assert.strictEqual(row.status, 'fail');
+  assert.match(row.detail, /engine-no-cli: src\/engine\/x\.js → bin\/felix\.js/);
+});
+test('deps: buildForbiddenRules always injects no-circular and compiles a valid layer glob', () => {
+  const { rules, error } = buildForbiddenRules(
+    { layers: [{ name: 'engine-no-cli', from: 'src/engine/**', to: 'bin/**' }] }, picomatchLib);
+  assert.ok(!error);
+  assert.strictEqual(rules[0].name, 'no-circular');
+  assert.deepStrictEqual(rules[0].to, { circular: true });
+  assert.strictEqual(rules[1].name, 'engine-no-cli');
+  // The compiled glob source must actually match a nested path under RegExp.test.
+  assert.ok(new RegExp(rules[1].from.path).test('src/engine/util/exec.js'));
+});
+test('deps: an invalid layer is a labeled error (a config typo must not crash Tier 1 or drop a rule)', () => {
+  assert.match(buildForbiddenRules({ layers: [{ from: 'a/**', to: 'b/**' }] }, picomatchLib).error, /missing name/);
+  assert.match(buildForbiddenRules({ layers: [{ name: 'x', to: 'b/**' }] }, picomatchLib).error, /required/);
+  assert.match(buildForbiddenRules({ layers: [{ name: 'x', from: 'a/**', to: 'b/**' }, { name: 'x', from: 'c/**', to: 'd/**' }] }, picomatchLib).error, /duplicate/);
+});
+test('deps: picomatch.makeRe(src/engine/**) matches a nested file under RegExp.test', () => {
+  const re = picomatchLib.makeRe('src/engine/**', { dot: true });
+  assert.ok(re.test('src/engine/util/exec.js'));
+  assert.ok(!re.test('bin/felix.js'));
+});
+test('deps: renderDcConfig always excludes node_modules and is requireable CommonJS', () => {
+  const src = renderDcConfig({ exclude: ['(^|/)dist/'] }, [{ name: 'no-circular', severity: 'error', from: {}, to: { circular: true } }]);
+  assert.match(src, /module\.exports =/);
+  assert.match(src, /node_modules/);
+  assert.match(src, /dist/);
+});
+test('deps: coupling delta reports only |Δfan-in| ≥ 2 on changed modules, tags new files', () => {
+  const headModules = [
+    { source: 'src/hub.js', dependents: [1, 2, 3, 4, 5], dependencies: [1] },  // fan-in 2→5
+    { source: 'src/newfile.js', dependents: [1, 2], dependencies: [] },        // new, fan-in 0→2
+    { source: 'src/quiet.js', dependents: [1], dependencies: [1] },            // Δ0 → omitted
+  ];
+  const baseModules = [
+    { source: 'src/hub.js', dependents: [1, 2], dependencies: [1] },
+    { source: 'src/quiet.js', dependents: [1], dependencies: [1] },
+  ];
+  const changedSet = buildChangedSet([
+    { status: 'modified', filename: 'src/hub.js' },
+    { status: 'added', filename: 'src/newfile.js' },
+    { status: 'modified', filename: 'src/quiet.js' },
+  ]);
+  const lines = couplingDelta({ headModules, baseModules, changedSet, renameMap: new Map() });
+  assert.strictEqual(lines.length, 2);
+  assert.match(lines[0], /src\/hub\.js fan-in 2 → 5 \(\+3\)/);
+  assert.match(lines.join('\n'), /src\/newfile\.js fan-in 0 → 2 \(\+2\).*new file/);
+  assert.ok(!lines.join('\n').includes('quiet.js'), 'a Δ0 module must not be reported');
+});
+test('deps: config.merge fills the deps defaults (disabled) and lets a user enable it', () => {
+  assert.strictEqual(merge({}, {}).deps.enabled, false);
+  assert.deepStrictEqual(merge({}, {}).deps.exclude, ['(^|/)node_modules/']);
+  assert.strictEqual(merge({}, { deps: { enabled: true } }).deps.enabled, true);
+});
+
+test('deps: overlapping cycles in one SCC — removing an edge (improvement) does NOT phantom-flag', () => {
+  // Probe-confirmed on dc 18.1.0: a base SCC {a,b,c} with edges a→b, b→a, b→c, c→a reports TWO
+  // cycle keys — cycle:a.js|b.js and cycle:a.js|b.js|c.js. A PR removing b→a leaves only the
+  // a|b|c cycle on head, and that key is already in baseKeys ⇒ pre-existing, no candidate.
+  const base = [
+    cyc('a.js', ['b.js', 'a.js']),               // key a|b
+    cyc('b.js', ['c.js', 'a.js', 'b.js']),       // key a|b|c
+  ];
+  const head = [cyc('a.js', ['b.js', 'c.js', 'a.js'])]; // key a|b|c only (b→a removed)
+  const filesAll = [{ status: 'modified', filename: 'b.js' }];
+  const { candidates, preExisting } = diffViolations({
+    headViolations: head, baseViolations: base,
+    renameMap: buildRenameMap(filesAll), changedSet: buildChangedSet(filesAll),
+  });
+  assert.strictEqual(candidates.length, 0, 'a structure improvement must never flag');
+  assert.strictEqual(preExisting, 1);
+});
+test('deps: import-order permutation of the same SCC yields the identical key set', () => {
+  const set = (vs) => Array.from(new Set(vs.map((v) => keyOf(v)))).sort();
+  const order1 = set([cyc('a.js', ['b.js', 'a.js']), cyc('b.js', ['c.js', 'a.js', 'b.js'])]);
+  const order2 = set([cyc('b.js', ['c.js', 'a.js', 'b.js']), cyc('a.js', ['b.js', 'a.js'])]);
+  assert.deepStrictEqual(order1, order2);
+  assert.deepStrictEqual(order1, ['cycle:a.js|b.js', 'cycle:a.js|b.js|c.js']);
+});
+test('deps: ESM SCC cycles key with FULL membership (probe-confirmed 5 distinct keys)', () => {
+  // dc 18.1.0 on a 5-node .mjs SCC emits 5 simple cycles, each cycle[] closing back to `from`.
+  const esm = [
+    cyc('a.mjs', ['b.mjs', 'a.mjs']),
+    cyc('a.mjs', ['c.mjs', 'b.mjs', 'a.mjs']),
+    cyc('b.mjs', ['c.mjs', 'b.mjs']),
+    cyc('c.mjs', ['d.mjs', 'e.mjs', 'c.mjs']),
+    cyc('d.mjs', ['e.mjs', 'a.mjs', 'b.mjs', 'c.mjs', 'd.mjs']),
+  ];
+  assert.deepStrictEqual(esm.map((v) => keyOf(v)).sort(), [
+    'cycle:a.mjs|b.mjs',
+    'cycle:a.mjs|b.mjs|c.mjs',
+    'cycle:a.mjs|b.mjs|c.mjs|d.mjs|e.mjs',
+    'cycle:b.mjs|c.mjs',
+    'cycle:c.mjs|d.mjs|e.mjs',
+  ]);
+});
+test('deps: a copied file does NOT contribute its previous_filename (renamed-only attribution)', () => {
+  const filesAll = [{ status: 'copied', filename: 'dst.js', previous_filename: 'src.js' }];
+  const rm = buildRenameMap(filesAll);
+  const cs = buildChangedSet(filesAll);
+  assert.strictEqual(rm.has('src.js'), false, 'a copy is not a rename — no key rewrite');
+  assert.strictEqual(cs.has('src.js'), false, 'the copy source still exists in head — not attributable');
+  assert.strictEqual(cs.has('dst.js'), true);
+});
+test('deps: a layer named no-circular is rejected (reserved for the injected cycle rule)', () => {
+  const { error } = buildForbiddenRules({ layers: [{ name: 'no-circular', from: 'a/**', to: 'b/**' }] }, picomatchLib);
+  assert.match(error, /reserved name/);
 });
 
 // ── module lock (S2, F5) ─────────────────────────────────────────────────────

@@ -14,6 +14,8 @@ const picomatch = require('picomatch');
 const { run, tail } = require('./util/exec');
 const { wrapCommand, resolveIsolation } = require('./isolation');
 const { buildDrivePlan, driveApp } = require('./drive');
+const { runCrapCheck } = require('./crap');
+const { runDepsCheck } = require('./deps');
 const { logger } = require('./util/logger');
 
 // Vendor-specific, high-signal secret shapes. A match here has a distinctive prefix
@@ -158,7 +160,7 @@ function changedTestFiles(files, config) {
     .map((f) => f.filename);
 }
 
-async function runTier1({ cwd, env, config, files }) {
+async function runTier1({ cwd, env, config, files, repoPath, baseSha, headSha, filesAll }) {
   const c = config.commands || {};
   const t = config.timeouts || {};
   const isolation = resolveIsolation(config);
@@ -196,7 +198,38 @@ async function runTier1({ cwd, env, config, files }) {
     cmd: c.smoke, cwd, env, timeoutMs: (config.smoke && config.smoke.timeoutMs) || 60000, isolation, network: 'deny',
   }));
 
-  results.push(await runCheck({ name: 'test', hard: true, cmd: c.test, cwd, env, timeoutMs: t.testMs || 600000, isolation, network: 'deny' }));
+  const testResult = await runCheck({ name: 'test', hard: true, cmd: c.test, cwd, env, timeoutMs: t.testMs || 600000, isolation, network: 'deny' });
+  results.push(testResult);
+
+  // CRAP (opt-in, soft): flag changed functions that are complex AND under-tested.
+  // The enabled gate is FIRST — when off, NOTHING is pushed, so the verdict is
+  // byte-identical to a build without this check. When on, it runs the suite once
+  // more under coverage (c8) + measures cyclomatic complexity (escomplex) on the
+  // changed functions. A failing suite makes coverage meaningless, so skip then.
+  if (config.crap && config.crap.enabled) {
+    if (testResult.status !== 'pass') {
+      results.push({ name: 'crap', tier: 1, status: 'skip', hard: false, detail: 'crap: tests did not pass — coverage would be meaningless, not scoring', output: '' });
+    } else {
+      results.push(await runCrapCheck({
+        cwd, env, testCmd: c.test, files,
+        threshold: config.crap.threshold,
+        isolationMode: isolation.mode,
+        run, timeoutMs: t.testMs || 600000,
+      }));
+    }
+  }
+
+  // Dependency-direction check (opt-in, soft/advisory). Gate FIRST so a disabled repo
+  // builds no graph and its verdict stays byte-identical — nothing is pushed here at all.
+  // It cruises pristine base+head worktrees itself (not `cwd`), so no sandbox dir is passed.
+  // filesAll MUST be the FULL changed-file list — no fallback to the behavioral `files`
+  // subset (a filtered list would miss renames and phantom-flag; runDepsCheck SKIPs on absence).
+  if (config.deps && config.deps.enabled) {
+    results.push(await runDepsCheck({
+      repoPath, baseSha, headSha, filesAll, config, run,
+      timeoutMs: config.deps.timeoutMs || 120000,
+    }));
+  }
 
   // Drive the running app (R1, opt-in): boot it and probe declared routes. These
   // are HARD checks — a 500/404/blank boot on a declared route → NOT VERIFIED.
