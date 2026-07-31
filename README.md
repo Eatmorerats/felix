@@ -48,6 +48,31 @@ drive/secrets). **Tier 2** = soft *static* signals (lint, typecheck) — emitted
 rows within the Tier 1 results, never gating on their own. **Tier 3** = the cross-family LLM
 judge. (There is no separate `tier2` module; the split is by `hard` flag, not by file.)
 
+## Architecture at a glance
+
+One PR flows top-to-bottom through `src/engine/`. Each module owns one job — Felix is
+opinionated about keeping the dependencies between them small (it verifies that property on
+other people's PRs, so it holds itself to it):
+
+| Module | Responsibility |
+| --- | --- |
+| `index.js` | **Orchestrator** — runs the 9-step pipeline above for one PR |
+| `github.js` | Minimal GitHub REST client — PR metadata, changed files, diff, head/base SHA, the comment |
+| `config.js` | Load the per-repo `felix.config.json`, or **auto-learn** the project type from its manifests |
+| `spec.js` | Find the *human* spec (PR body + linked issues) and turn it into checkable criteria |
+| `sandbox.js` | Check out the PR head into a disposable, secret-free `git worktree` |
+| `isolation.js` | Stronger sandbox isolation for untrusted PR commands (later phase) |
+| `tier1.js` | The deterministic, non-LLM checks against the running code (install / build / test / secrets) |
+| `drive.js` | Boot and **drive** the running app — HTTP-probe routes + a headless page-load render |
+| `flows.js` | Drive the app like a **user** — named click-and-assert interaction flows |
+| `gating.js` | Turn advisory results into an authoritative gate (later phase) |
+| `judge.js` | The **Tier 3 cross-family LLM judge** — rules each criterion met/unmet |
+| `budget.js` | Size the judge prompt against the account's rate limit; split a large diff into paced passes |
+| `verdict.js` | Combine triage + Tier 1 + Tier 3 into one verdict via a deterministic decision table |
+| `comment.js` | Render the verdict as a compact, idempotent markdown PR comment |
+| `log.js` | Best-effort write of one `felix_verdicts` row to Supabase (never blocks a verdict) |
+| `calibration.js` / `outcomes.js` | Turn logged verdicts + real post-merge outcomes into precision/recall metrics |
+
 ## Run it by hand (Phase 1)
 
 ```bash
