@@ -64,6 +64,49 @@ function readJSON(p) {
 }
 
 /**
+ * Auto-detected TEST commands are never chained with `||`.
+ *
+ * `||` fires on a non-zero exit, and a failing test suite is exactly that — so
+ * `npx vitest run || npx jest || npx mocha` handed a genuine failure to the next runner,
+ * which typically found no tests and exited 0. `test` is hard:true, so that was a green
+ * tick on the one check carrying the product's entire claim. Measured, not theorized:
+ * `python -m unittest` discovering zero tests exits 0 on Python 3.14.
+ *
+ * So: pick the runner from what the repo actually DECLARES, run it once, and emit '' when
+ * nothing is evidenced — validate() then refuses the config by name instead of inventing a
+ * pass. An honest "could not detect a test command" is worth more than a fabricated ✅.
+ *
+ * `--no-install` is the other half of the same finding. Bare `npx <pkg>` DOWNLOADS AND
+ * EXECUTES a package from the npm registry, and these commands run in the sandbox that is
+ * running untrusted pull-request code — three registry installs nobody asked for. With
+ * --no-install a missing binary exits 1 (verified) instead of fetching a stranger's code.
+ *
+ * INSTALL commands still chain, and that is fine: `npm ci || npm install` are two ways of
+ * doing the SAME job, and if both fail the non-zero exit is caught as installFailed ⇒
+ * INSUFFICIENT EVIDENCE. The test chain was unsound because failure was the trigger.
+ */
+const RUNNER_CMD = {
+  vitest: 'npx --no-install vitest run',
+  jest: 'npx --no-install jest',
+  mocha: 'npx --no-install mocha',
+  ava: 'npx --no-install ava',
+};
+const RUNNER_ONE = {
+  vitest: 'npx --no-install vitest run {file}',
+  jest: 'npx --no-install jest {file}',
+  mocha: 'npx --no-install mocha {file}',
+  ava: 'npx --no-install ava {file}',
+};
+
+/** Does the repo give hard evidence it actually uses pytest? */
+function evidencesPytest({ pyproject, setupCfg, requirements }) {
+  return /\[tool\.pytest/.test(pyproject)
+    || /\[tool:pytest\]/.test(setupCfg)
+    || /(^|\s|=|<|>)pytest(\s|$|[=<>!~[])/m.test(requirements)
+    || /(^|\s)["']?pytest["']?\s*[=<>~]/m.test(pyproject);
+}
+
+/**
  * Inspect a repo directory and guess how to install/test/build it.
  * Returns a partial config { language, commands, test } or null if unknown.
  */
@@ -83,13 +126,13 @@ function detect(repoPath) {
       : lockCi ? 'npm ci || npm install'
       : 'npm install';
 
-    // Prefer a real test script; otherwise try the common runners directly.
-    const test = scripts.test
-      ? `${pmRun(usePnpm, useYarn)} test`
-      : 'npx vitest run || npx jest || npx mocha';
-
     const build = scripts.build ? `${pmRun(usePnpm, useYarn)} build` : '';
     const framework = detectNodeFramework(pkg);
+
+    // Prefer the repo's own test script. Failing that, run the ONE runner it depends on —
+    // never a `||` chain (see RUNNER_CMD above). No script and no declared runner means we
+    // genuinely cannot test this repo, and '' says so out loud.
+    const test = scripts.test ? `${pmRun(usePnpm, useYarn)} test` : (RUNNER_CMD[framework] || '');
 
     // Tier 2 static signals (soft) — only when the repo clearly supports them.
     const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
@@ -104,7 +147,7 @@ function detect(repoPath) {
         install,
         preTest: '',
         test,
-        testOne: 'npx vitest run {file} || npx jest {file} || npx mocha {file}',
+        testOne: RUNNER_ONE[framework] || '',
         smoke: build ? `${build} --if-present` : '',
         lint,
         typecheck,
@@ -127,10 +170,21 @@ function detect(repoPath) {
         ? 'pip install -r requirements.txt'
         : 'pip install -e .';
     // Static signals only when the repo clearly configures the tool (no noise).
-    let pyproject = '';
-    if (has('pyproject.toml')) {
-      try { pyproject = fs.readFileSync(path.join(repoPath, 'pyproject.toml'), 'utf8') || ''; } catch { /* best-effort */ }
-    }
+    const readIf = (f) => {
+      if (!has(f)) return '';
+      try { return fs.readFileSync(path.join(repoPath, f), 'utf8') || ''; } catch { return ''; /* best-effort */ }
+    };
+    const pyproject = readIf('pyproject.toml');
+    const setupCfg = readIf('setup.cfg');
+    const requirements = `${readIf('requirements.txt')}\n${readIf('requirements-dev.txt')}\n${readIf('dev-requirements.txt')}`;
+
+    // pytest ONLY when the repo evidences it, and never chained. The old
+    // `pytest -q || python -m pytest -q || python -m unittest` ended in a discovery run that
+    // exits 0 on finding nothing, so a genuinely failing suite reported ✅ on a hard check.
+    // No evidence ⇒ '' ⇒ validate() refuses the config, which is the honest answer.
+    const pytestEvidenced = evidencesPytest({ pyproject, setupCfg, requirements }) || has('pytest.ini');
+    const pyTest = pytestEvidenced ? 'pytest -q' : '';
+    const pyTestOne = pytestEvidenced ? 'pytest -q {file}' : '';
     const lint = (has('ruff.toml') || has('.ruff.toml') || /\[tool\.ruff/.test(pyproject)) ? 'ruff check .'
       : has('.flake8') ? 'flake8 .' : '';
     const typecheck = (has('mypy.ini') || has('.mypy.ini') || /\[tool\.mypy/.test(pyproject)) ? 'mypy .' : '';
@@ -139,8 +193,8 @@ function detect(repoPath) {
       commands: {
         install,
         preTest: '',
-        test: 'pytest -q || python -m pytest -q || python -m unittest',
-        testOne: 'pytest -q {file} || python -m pytest -q {file}',
+        test: pyTest,
+        testOne: pyTestOne,
         smoke: '',
         lint,
         typecheck,
@@ -250,7 +304,15 @@ function merge(detected, user) {
 function validate(config) {
   const errors = [];
   if (!config.commands || !config.commands.test) {
-    errors.push('commands.test is required (could not detect a test command)');
+    // Reached when detection found a project it recognizes but no runner it can PROVE is
+    // there. Refusing by name is the point: the alternative was guessing a chain of runners
+    // and reporting whichever one exited 0. Tell them exactly what to set.
+    errors.push(
+      'commands.test is required (could not detect a test command) — set "commands": ' +
+      '{ "test": "<your test command>" } in felix.config.json. Felix will not guess a test ' +
+      'runner it cannot see, because a runner that finds no tests exits 0 and would report a ' +
+      'false pass.'
+    );
   }
   if (!config.commands || !config.commands.install) {
     errors.push('commands.install is required');

@@ -11,7 +11,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { detect, merge } = require('../src/engine/config');
+const { detect, merge, validate } = require('../src/engine/config');
 const { extractCriteria, buildSpec, linkedIssueNumbers } = require('../src/engine/spec');
 const { compose, VERDICTS, conclusionFor } = require('../src/engine/verdict');const { assertCrossFamily, buildPrompt, createJudge, mergeChunkRulings, chunkVerdict, PROVIDERS } = require('../src/engine/judge');
 const {
@@ -132,6 +132,82 @@ test('detects a python repo', () => {
   assert.strictEqual(c.language, 'python');
   assert.match(c.commands.test, /pytest/);
 });
+// ─── no `||` in an auto-detected TEST command ────────────────────────────────
+// `||` fires on a non-zero exit and a failing suite is exactly that, so a chained runner
+// list handed real failures to whichever runner exited 0 — on a hard:true check. These
+// pin the rule directly: one runner, chosen from what the repo declares, or nothing.
+const writeRepo = (files) => {
+  const d = tmpdir();
+  for (const [name, body] of Object.entries(files)) {
+    fs.writeFileSync(path.join(d, name), typeof body === 'string' ? body : JSON.stringify(body));
+  }
+  return d;
+};
+
+test('a node repo with no test script runs the ONE runner it declares, never a || chain', () => {
+  const c = detect(writeRepo({ 'package.json': { devDependencies: { jest: '^29' } } }));
+  assert.strictEqual(c.commands.test, 'npx --no-install jest');
+  assert.doesNotMatch(c.commands.test, /\|\|/, 'a failing suite must not fall through to another runner');
+  assert.doesNotMatch(c.commands.testOne, /\|\|/);
+});
+
+test('the declared runner is honored, not a fixed preference order', () => {
+  const mocha = detect(writeRepo({ 'package.json': { devDependencies: { mocha: '^11' } } }));
+  assert.strictEqual(mocha.commands.test, 'npx --no-install mocha');
+  const vitest = detect(writeRepo({ 'package.json': { devDependencies: { vitest: '^2' } } }));
+  assert.strictEqual(vitest.commands.test, 'npx --no-install vitest run');
+});
+
+test('auto-detected npx commands carry --no-install (no registry fetch in the sandbox)', () => {
+  // Bare `npx <pkg>` downloads and executes a package from the registry — inside the
+  // sandbox running untrusted PR code. --no-install makes a missing binary exit 1 instead.
+  const c = detect(writeRepo({ 'package.json': { devDependencies: { vitest: '^2' } } }));
+  for (const cmd of [c.commands.test, c.commands.testOne]) {
+    assert.match(cmd, /npx --no-install /, 'every auto-detected npx call must refuse to install');
+  }
+});
+
+test('a node repo with neither a test script nor a known runner emits NO test command', () => {
+  const c = detect(writeRepo({ 'package.json': { dependencies: { express: '^4' } } }));
+  assert.strictEqual(c.commands.test, '', 'guessing a runner is what produced the false green');
+  const errs = validate(c);
+  assert.strictEqual(errs.length, 1);
+  assert.match(errs[0], /could not detect a test command/);
+});
+
+test('a repo WITH a test script still uses it — the fix must not break the normal case', () => {
+  const c = detect(writeRepo({ 'package.json': { scripts: { test: 'vitest run' }, devDependencies: { vitest: '^2' } } }));
+  assert.strictEqual(c.commands.test, 'npm run test');
+});
+
+test('python: pytest only when the repo evidences it, and never chained', () => {
+  const viaPyproject = detect(writeRepo({ 'pyproject.toml': '[tool.pytest.ini_options]\naddopts = "-ra"\n' }));
+  assert.strictEqual(viaPyproject.commands.test, 'pytest -q');
+  const viaReqs = detect(writeRepo({ 'requirements.txt': 'flask==3.0.0\npytest>=8\n' }));
+  assert.strictEqual(viaReqs.commands.test, 'pytest -q');
+  for (const c of [viaPyproject, viaReqs]) {
+    assert.doesNotMatch(c.commands.test, /\|\|/);
+    assert.doesNotMatch(c.commands.test, /unittest/, 'unittest discovery exits 0 on zero tests');
+  }
+});
+
+test('python with no pytest evidence emits NO test command rather than `python -m unittest`', () => {
+  // Measured: `python -m unittest` discovering zero tests exits 0 (Python 3.14). As the tail
+  // of a || chain that turned every genuine failure into a green hard check.
+  const c = detect(writeRepo({ 'requirements.txt': 'flask==3.0.0\n' }));
+  assert.strictEqual(c.commands.test, '');
+  assert.strictEqual(c.commands.testOne, '');
+  assert.match(validate(c)[0], /could not detect a test command/);
+});
+
+test('install commands may still chain — there `||` is two ways to do one job', () => {
+  // npm ci fails on a stale lockfile and npm install is a correct recovery; if BOTH fail the
+  // non-zero exit is caught as installFailed => INSUFFICIENT. Failure was never the trigger
+  // for the fallback, which is what made the TEST chain unsound.
+  const c = detect(writeRepo({ 'package.json': { scripts: { test: 'x' } }, 'package-lock.json': {} }));
+  assert.strictEqual(c.commands.install, 'npm ci || npm install');
+});
+
 test('returns null for an unknown repo', () => {
   assert.strictEqual(detect(tmpdir()), null);
 });
