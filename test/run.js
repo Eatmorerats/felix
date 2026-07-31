@@ -1065,7 +1065,12 @@ atest('an empty bench (every seat fails) is a hard error, not a pass', async () 
     openai: { ok: false, status: 500, body: 'boom' },
     gemini: { ok: false, status: 500, body: 'boom' },
   });
-  await assert.rejects(createJudge(JURY_ENV, { fetchImpl: ff })(JURY_INPUT), /All 2 jury seat\(s\) failed/);
+  // sleepImpl matters here: a 500 is retryable, so both seats burn the full retry backoff.
+  // Without it this one test spent ~60s of real wall-clock — the whole suite's runtime.
+  await assert.rejects(
+    createJudge(JURY_ENV, { fetchImpl: ff, sleepImpl: noSleep })(JURY_INPUT),
+    /All 2 jury seat\(s\) failed/,
+  );
 });
 
 atest('per-seat models are honored positionally', async () => {
