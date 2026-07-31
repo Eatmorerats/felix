@@ -45,6 +45,7 @@ const { spawn } = require('child_process');
 const { logger } = require('./util/logger');
 const { joinUrl } = require('./util/url');
 const { buildFlows, resolveFlowOpts, runFlows } = require('./flows');
+const { getPlaywrightChromium } = require('./preload');
 
 const DEFAULT_DRIVE = {
   enabled: false,
@@ -225,13 +226,17 @@ async function waitForReady(readyUrl, deadlineMs, probeTimeoutMs) {
   return false;
 }
 
-/** Lazy-load Playwright's chromium; returns null if it isn't installed (opt-in dep). */
+/**
+ * Playwright's chromium, or null if it isn't installed (opt-in dep).
+ *
+ * Deliberately NOT a lazy require. This is called from driveApp, i.e. after Tier 1 has
+ * already run untrusted PR code, and `playwright` is not a declared dependency — so the
+ * resolution walk reaches directories that untrusted step can write, and a planted
+ * `playwright/index.js` would execute IN THIS PROCESS, holding every secret (S2). The
+ * module is preloaded at startup instead; here we only read the cached handle.
+ */
 function loadChromium() {
-  try { return require('playwright').chromium; }
-  catch (_) {
-    try { return require('playwright-core').chromium; }
-    catch (_2) { return null; }
-  }
+  return getPlaywrightChromium();
 }
 
 /**
@@ -400,5 +405,5 @@ async function driveApp({ cwd, env, plan }) {
 
 module.exports = {
   DEFAULT_DRIVE, DEFAULT_PAGE_LOAD, resolveDrive, buildDrivePlan,
-  interpretProbe, interpretPageLoad, joinUrl, driveApp, loadPages, launchBrowser,
+  interpretProbe, interpretPageLoad, joinUrl, driveApp, loadPages, launchBrowser, loadChromium,
 };

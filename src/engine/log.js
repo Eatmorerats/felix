@@ -6,6 +6,7 @@
  */
 
 const { logger } = require('./util/logger');
+const { getSupabaseCreateClient } = require('./preload');
 
 /** Build a Supabase client, or null (with a warning) if the env isn't configured. */
 function client(env = process.env) {
@@ -15,7 +16,14 @@ function client(env = process.env) {
     logger.warn('Supabase not configured — set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY to log/read verdicts.');
     return null;
   }
-  const { createClient } = require('@supabase/supabase-js');
+  // Preloaded at startup, never require()d here: this function runs from finalize(),
+  // i.e. AFTER untrusted PR code has executed, and a first-time load at that point can
+  // be hijacked by a planted module running in-process with this very key (F5).
+  const createClient = getSupabaseCreateClient();
+  if (!createClient) {
+    logger.warn('@supabase/supabase-js is not installed — skipping the verdict log.');
+    return null;
+  }
   return createClient(url, key);
 }
 
