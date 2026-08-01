@@ -175,11 +175,47 @@ depth) and `.github/workflows/**` are always treated as behavioural, whatever `s
 the base that everything above trusts. The practical effect: **dependency-bump PRs now get
 fully verified instead of skipped.** That is intended; a lockfile bump is behavioural.
 
-> **Marking the check Required?** Set `"gating": { "blockOn": ["NOT VERIFIED", "INSUFFICIENT
-> EVIDENCE"] }` in the base config. GitHub counts `neutral` and `skipped` as *passing*, and
-> INSUFFICIENT EVIDENCE maps to `neutral` — so with the default `blockOn` a PR with no
-> acceptance criteria, a broken install, or a fork PR (no judge secret) does not block. The
-> trust boundary makes the policy honest; it does not by itself make the gate hard.
+> **Marking the check Required?** Set this in the base config:
+>
+> ```json
+> "gating": {
+>   "enabled": true,
+>   "blockOn": ["NOT VERIFIED", "INSUFFICIENT EVIDENCE"],
+>   "insufficientExempt": ["judge_unconfigured"]
+> }
+> ```
+>
+> GitHub counts `neutral` and `skipped` as *passing*, and INSUFFICIENT EVIDENCE maps to
+> `neutral` — so with the default `blockOn` a PR with no acceptance criteria, a broken
+> install, or a fork PR does not block. The trust boundary makes the policy honest; it
+> does not by itself make the gate hard.
+
+#### Why insufficiency is not one thing
+
+INSUFFICIENT EVIDENCE has several causes and they are not equally safe to let through.
+Every verdict carries a machine-readable `cause`, and `insufficientExempt` names the ones a
+gated repo will still pass on. The axis is **can head content reach this state**, not "can
+the contributor fix it":
+
+| cause | reachable from the PR? | default |
+| --- | --- | --- |
+| `install_failed` | ✅ yes — `"preinstall": "exit 1"` | 🔒 blocks |
+| `no_spec` | ✅ yes — and cheapest of all: write no acceptance criteria | 🔒 blocks |
+| `fork` | ✅ yes — *selectable*: open the PR from a fork and the judge is skipped | 🔒 blocks |
+| `judge_error` | ✅ yes — criteria come from the PR body and can be sized to break the judge | 🔒 blocks |
+| `judge_unconfigured` | ❌ no — it is your own missing key | 🔓 exempt |
+| `judge_unavailable_unknown` | — residual, should never fire | 🔒 blocks |
+
+`fork` blocks even though an outside contributor cannot un-fork their PR. That is
+deliberate: it is the cheapest bypass in the whole system, so leaving it open would make
+every other row decorative. The relief valve is the `overrideLabel`, which needs write
+access an outside contributor does not have. A fork-heavy project that accepts the trade
+can add `"fork"` to `insufficientExempt` — one reviewable line, in the base config.
+
+`insufficientExempt` is an **exemption** list rather than an inclusion list so that a cause
+added by a future Felix version blocks by default instead of silently passing. Unrecognized
+values in either array are a **hard config error** — previously a typo like
+`"INSUFFICENT EVIDENCE"` matched nothing and silently left the repo with no gate at all.
 
 ### Driving the app (opt-in)
 

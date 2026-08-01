@@ -288,7 +288,11 @@ async function run(opts) {
 
 async function finalize({ gh, owner, repo, number, dryRun, post, started, meta, configSource, detected, env, verdictObj, spec, tier1, tier3, gating, labels }) {
   meta.durationMs = Date.now() - started;
-  const gateResult = gateDecision({ verdict: verdictObj.verdict, gating: gating || resolveGating({}), labels: labels || [] });
+  // `cause` is what lets an INSUFFICIENT EVIDENCE gate distinguish the lanes a PR can
+  // drive (broken install, no criteria, fork, an induced judge error) from the one it
+  // cannot (the adopter has no judge key). Dropping it here would collapse them back
+  // into one bucket and quietly re-open the bypass — the F2/M7 dead-code shape.
+  const gateResult = gateDecision({ verdict: verdictObj.verdict, cause: verdictObj.cause, gating: gating || resolveGating({}), labels: labels || [] });
   const note = verdictObj.verdict === 'SKIPPED' ? verdictObj.reason : undefined;
   let body = render({
     verdict: verdictObj.verdict, spec, tier1, tier3,

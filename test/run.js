@@ -18,7 +18,7 @@ const {
   POLICY_KEYS, MECHANICS_KEYS, DEFAULT_SKIP_GLOBS, DEFAULT_SECRETS,
 } = require('../src/engine/config');
 const { extractCriteria, buildSpec, linkedIssueNumbers } = require('../src/engine/spec');
-const { compose, VERDICTS, conclusionFor } = require('../src/engine/verdict');const { assertCrossFamily, buildPrompt, createJudge, mergeChunkRulings, chunkVerdict, PROVIDERS } = require('../src/engine/judge');
+const { compose, VERDICTS, CAUSES, INSUFFICIENT_CAUSES, conclusionFor } = require('../src/engine/verdict');const { assertCrossFamily, buildPrompt, createJudge, mergeChunkRulings, chunkVerdict, PROVIDERS } = require('../src/engine/judge');
 const {
   estimateTokens, tokensToChars, splitDiffByFile, packChunks, planJudgeCalls, paceMs,
 } = require('../src/engine/budget');
@@ -323,9 +323,20 @@ test('NOT VERIFIED when judge marks a criterion unmet', () => {
   assert.strictEqual(v.verdict, VERDICTS.NOT_VERIFIED);
 });
 test('INSUFFICIENT when judge unavailable', () => {
-  const v = compose({ triage: {}, spec: realSpec, tier1: goodTier1, tier3: null });
+  // `configured: false` is now REQUIRED to earn the "not configured" reading. It is the
+  // one cause a gated repo may pass on, so it is granted on positive evidence only.
+  const v = compose({ triage: {}, spec: realSpec, tier1: goodTier1, tier3: null, judgeStatus: { configured: false } });
   assert.strictEqual(v.verdict, VERDICTS.INSUFFICIENT);
   assert.strictEqual(v.reason, 'judge not configured');
+  assert.strictEqual(v.cause, CAUSES.JUDGE_UNCONFIGURED);
+});
+test('a null tier3 with no explanation lands on the residual cause, not the exempt one', () => {
+  // This shape used to fall off the end of the branch and read as "not configured" —
+  // i.e. it would have inherited the one exemption and silently passed a Required check.
+  const v = compose({ triage: {}, spec: realSpec, tier1: goodTier1, tier3: null });
+  assert.strictEqual(v.verdict, VERDICTS.INSUFFICIENT);
+  assert.strictEqual(v.cause, CAUSES.JUDGE_UNAVAILABLE_UNKNOWN);
+  assert.notStrictEqual(v.cause, CAUSES.JUDGE_UNCONFIGURED);
 });
 test('INSUFFICIENT surfaces the judge error when the call failed', () => {
   const v = compose({ triage: {}, spec: realSpec, tier1: goodTier1, tier3: null, judgeStatus: { configured: true, error: 'Judge call failed: 401 invalid api key' } });
@@ -857,6 +868,19 @@ test('index.js threads repoRoot into runTier1 (the arg the unit tests cannot see
     'index.js must pass repoRoot: sandbox.dir — without it the secrets scan reads the workdir');
 });
 
+// Same shape, same reason. gateDecision() and compose() are both pure and fully unit
+// tested, so the attribution table above passes whether or not index.js actually hands
+// the cause over. Measured: deleting `cause: verdictObj.cause` from the finalize() call
+// left the whole suite green at 316/0. Without the cause every INSUFFICIENT looks
+// identical to the gate again — `judge_unconfigured` stops being exempt and a repo that
+// gated on Felix before setting a judge key goes red on every PR. Pin the wiring.
+test('index.js threads the verdict cause into gateDecision (the arg the unit tests cannot see)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'engine', 'index.js'), 'utf8');
+  const call = src.slice(src.indexOf('gateDecision({'), src.indexOf('gateDecision({') + 300);
+  assert.ok(/\bcause:\s*verdictObj\.cause\b/.test(call),
+    'index.js must pass cause: verdictObj.cause into gateDecision — without it every INSUFFICIENT cause is indistinguishable to the gate');
+});
+
 console.log('housekeeping — version single-source + log DRY (R5)');
 test('the Felix version is single-sourced from package.json (no stale hardcodes)', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
@@ -1246,6 +1270,214 @@ test('override label bypasses a block', () => {
 test('blockOn is configurable (also block INSUFFICIENT EVIDENCE)', () => {
   const g = resolveGating({ gating: { enabled: true, blockOn: ['NOT VERIFIED', 'INSUFFICIENT EVIDENCE'] } });
   assert.strictEqual(gateDecision({ verdict: 'INSUFFICIENT EVIDENCE', gating: g, labels: [] }).blocks, true);
+});
+
+// ── INSUFFICIENT EVIDENCE attribution ────────────────────────────────────────
+//
+// INSUFFICIENT EVIDENCE maps to the `neutral` check conclusion, and GitHub counts
+// neutral as PASSING. So for a repo that marks Felix Required, every cause of an
+// insufficiency is a potential bypass lane. These tests pin which lanes are closed.
+//
+// The axis is ATTACKER-INDUCIBILITY, not "can the contributor fix it". `fork` is the
+// case that decides it: a fork contributor cannot un-fork their PR, but opening the PR
+// from a fork is the single cheapest way to skip the judge entirely, so it must block
+// (the override label, which needs write access, is the relief valve). If fork passed,
+// no attacker would bother with any other lane and the rest of this table is decorative.
+console.log('gating — INSUFFICIENT EVIDENCE attribution');
+
+const gatedInsufficient = () => resolveGating({
+  gating: { enabled: true, blockOn: ['NOT VERIFIED', 'INSUFFICIENT EVIDENCE'] },
+});
+
+test('every compose() return carries a cause, and INSUFFICIENT causes are declared', () => {
+  const cases = [
+    compose({ trigger: { draft: true } }),
+    compose({ triage: { skipped: true } }),
+    compose({ triage: {}, spec: realSpec, installFailed: true }),
+    compose({ triage: {}, spec: { hadRealSpec: false } }),
+    compose({ triage: {}, spec: realSpec, tier1: goodTier1, tier3: { criteria: [{ text: 'x', met: false }] } }),
+    compose({ triage: {}, spec: realSpec, tier1: goodTier1, tier3: null, judgeStatus: { fork: true } }),
+    compose({ triage: {}, spec: realSpec, tier1: goodTier1, tier3: null, judgeStatus: { configured: true, error: 'boom' } }),
+    compose({ triage: {}, spec: realSpec, tier1: goodTier1, tier3: null, judgeStatus: { configured: false } }),
+    compose({ triage: {}, spec: realSpec, tier1: goodTier1, tier3: null }),
+    compose({ triage: {}, spec: realSpec, tier1: goodTier1, tier3: { criteria: [{ text: 'x', met: true }] } }),
+  ];
+  for (const v of cases) {
+    assert.ok(v.cause, `every verdict needs a cause, got ${JSON.stringify(v)}`);
+    if (v.verdict === VERDICTS.INSUFFICIENT) {
+      assert.ok(INSUFFICIENT_CAUSES.includes(v.cause),
+        `${v.cause} is an INSUFFICIENT cause but is missing from INSUFFICIENT_CAUSES, so gating cannot exempt or reason about it`);
+    }
+  }
+  // The declared set must not rot in the other direction either.
+  const seen = new Set(cases.filter((v) => v.verdict === VERDICTS.INSUFFICIENT).map((v) => v.cause));
+  assert.deepStrictEqual([...INSUFFICIENT_CAUSES].sort(), [...seen].sort(),
+    'INSUFFICIENT_CAUSES and the causes compose() can actually emit have drifted apart');
+});
+
+// THE property test. `judge_unconfigured` is the only cause a gated repo may pass on,
+// so it must be granted on positive evidence and never by fallthrough. If someone later
+// adds a path that leaves tier3 null without setting fork/error, this test is what stops
+// it inheriting the exemption and silently passing a Required check.
+test('judge_unconfigured is earned by configured===false ONLY — every other null-tier3 shape blocks', () => {
+  const shapes = [
+    ['no judgeStatus at all', undefined],
+    ['empty judgeStatus', {}],
+    ['configured true, nothing else', { configured: true }],
+    ['configured undefined', { configured: undefined }],
+    ['configured null', { configured: null }],
+    ['configured 0 (falsy but not false)', { configured: 0 }],
+    ['configured "" (falsy but not false)', { configured: '' }],
+    ['configured "false" (the string)', { configured: 'false' }],
+    ['fork', { fork: true }],
+    ['error', { configured: true, error: 'boom' }],
+    ['fork AND unconfigured — fork wins, and both block anyway', { fork: true, configured: false }],
+    ['error AND unconfigured — error wins, and both block anyway', { configured: false, error: 'boom' }],
+  ];
+  const g = gatedInsufficient();
+  for (const [label, judgeStatus] of shapes) {
+    const v = compose({ triage: {}, spec: realSpec, tier1: goodTier1, tier3: null, judgeStatus });
+    assert.strictEqual(v.verdict, VERDICTS.INSUFFICIENT, label);
+    assert.notStrictEqual(v.cause, CAUSES.JUDGE_UNCONFIGURED,
+      `"${label}" must not earn the exempt cause — only an explicit configured===false may`);
+    assert.strictEqual(gateDecision({ verdict: v.verdict, cause: v.cause, gating: g }).blocks, true,
+      `"${label}" must block a gated repo`);
+  }
+  // ...and the one shape that does earn it.
+  const ok = compose({ triage: {}, spec: realSpec, tier1: goodTier1, tier3: null, judgeStatus: { configured: false } });
+  assert.strictEqual(ok.cause, CAUSES.JUDGE_UNCONFIGURED);
+  assert.strictEqual(gateDecision({ verdict: ok.verdict, cause: ok.cause, gating: g }).blocks, false);
+});
+
+test('the attribution table: four attacker-reachable causes block, only judge_unconfigured passes', () => {
+  const g = gatedInsufficient();
+  const expected = {
+    [CAUSES.INSTALL_FAILED]: true,
+    [CAUSES.NO_SPEC]: true,
+    [CAUSES.FORK]: true,
+    [CAUSES.JUDGE_ERROR]: true,
+    [CAUSES.JUDGE_UNAVAILABLE_UNKNOWN]: true,
+    [CAUSES.JUDGE_UNCONFIGURED]: false,
+  };
+  for (const cause of INSUFFICIENT_CAUSES) {
+    const d = gateDecision({ verdict: VERDICTS.INSUFFICIENT, cause, gating: g });
+    assert.strictEqual(d.blocks, expected[cause], `cause ${cause}: expected blocks=${expected[cause]}`);
+    // And the conclusion GitHub actually sees.
+    const conclusion = d.blocks ? 'failure' : d.overridden ? 'neutral' : conclusionFor(VERDICTS.INSUFFICIENT);
+    assert.strictEqual(conclusion, expected[cause] ? 'failure' : 'neutral', `cause ${cause}: check conclusion`);
+  }
+});
+
+// The laundering receipt. A PR can DETERMINISTICALLY induce judge_error: acceptance
+// criteria are read verbatim from the attacker-written PR body (spec.js enforces a
+// minimum length, never a maximum) and judge.js throws when criteria overhead alone
+// exceeds the seat budget. If judge_error were exempt, that throw would be a free
+// bypass out of a blocking cause into a passing one. It blocks, so inducing it is
+// self-DoS instead.
+test('laundering: an INDUCED judge error still blocks — it is not an escape hatch', () => {
+  const g = gatedInsufficient();
+  const v = compose({
+    triage: {}, spec: realSpec, tier1: goodTier1, tier3: null,
+    judgeStatus: { configured: true, error: 'Judge prompt overhead (48211 chars) alone exceeds the 30000 budget' },
+  });
+  assert.strictEqual(v.cause, CAUSES.JUDGE_ERROR);
+  const d = gateDecision({ verdict: v.verdict, cause: v.cause, gating: g });
+  assert.strictEqual(d.blocks, true);
+  assert.strictEqual(d.blocks ? 'failure' : conclusionFor(v.verdict), 'failure');
+});
+
+test('a missing or unknown cause exempts nothing', () => {
+  const g = gatedInsufficient();
+  assert.strictEqual(gateDecision({ verdict: VERDICTS.INSUFFICIENT, gating: g }).blocks, true);
+  assert.strictEqual(gateDecision({ verdict: VERDICTS.INSUFFICIENT, cause: undefined, gating: g }).blocks, true);
+  assert.strictEqual(gateDecision({ verdict: VERDICTS.INSUFFICIENT, cause: 'some_future_cause', gating: g }).blocks, true);
+});
+
+// Why gateDecision tests `cause &&` when `.includes(undefined)` is already false: it is
+// only redundant for a config that went through resolveGating, where assertKnown has
+// guaranteed every exempt id is a known non-empty string. gateDecision is also reachable
+// with a hand-built gating object (tests, embedders, DEFAULT_GATING fallback), and there
+// a falsy entry in insufficientExempt would turn into a WILDCARD that exempts a verdict
+// carrying no cause at all — passing a gated check on nothing. Mutation-found: dropping
+// the guard left the suite green until this test existed.
+test('a falsy exempt entry cannot become a wildcard for a causeless verdict', () => {
+  const unvalidated = { enabled: true, blockOn: ['INSUFFICIENT EVIDENCE'], insufficientExempt: [undefined] };
+  assert.strictEqual(gateDecision({ verdict: VERDICTS.INSUFFICIENT, cause: undefined, gating: unvalidated }).blocks, true);
+  assert.strictEqual(gateDecision({ verdict: VERDICTS.INSUFFICIENT, cause: null, gating: { ...unvalidated, insufficientExempt: [null] } }).blocks, true);
+  assert.strictEqual(gateDecision({ verdict: VERDICTS.INSUFFICIENT, cause: '', gating: { ...unvalidated, insufficientExempt: [''] } }).blocks, true);
+});
+
+test('the exemption is scoped to INSUFFICIENT EVIDENCE — it cannot rescue NOT VERIFIED', () => {
+  const g = resolveGating({
+    gating: { enabled: true, blockOn: ['NOT VERIFIED', 'INSUFFICIENT EVIDENCE'], insufficientExempt: ['judge_unconfigured'] },
+  });
+  // Same cause string, different verdict: must still block.
+  assert.strictEqual(gateDecision({ verdict: 'NOT VERIFIED', cause: CAUSES.JUDGE_UNCONFIGURED, gating: g }).blocks, true);
+});
+
+test('an adopter can exempt a cause they accept — e.g. a fork-heavy repo', () => {
+  const g = resolveGating({
+    gating: { enabled: true, blockOn: ['NOT VERIFIED', 'INSUFFICIENT EVIDENCE'], insufficientExempt: ['judge_unconfigured', 'fork'] },
+  });
+  assert.strictEqual(gateDecision({ verdict: VERDICTS.INSUFFICIENT, cause: CAUSES.FORK, gating: g }).blocks, false);
+  // Exempting fork must not accidentally exempt the others.
+  assert.strictEqual(gateDecision({ verdict: VERDICTS.INSUFFICIENT, cause: CAUSES.INSTALL_FAILED, gating: g }).blocks, true);
+});
+
+// ── migration ────────────────────────────────────────────────────────────────
+console.log('gating — migration and config validation');
+
+test('an existing explicit blockOn is preserved verbatim', () => {
+  const g = resolveGating({ gating: { enabled: true, blockOn: ['NOT VERIFIED'] } });
+  assert.deepStrictEqual(g.blockOn, ['NOT VERIFIED']);
+  // Insufficiency keeps passing for them until they opt in — no surprise breakage.
+  assert.strictEqual(gateDecision({ verdict: VERDICTS.INSUFFICIENT, cause: CAUSES.INSTALL_FAILED, gating: g }).blocks, false);
+});
+
+test('insufficientExempt defaults to judge_unconfigured when absent', () => {
+  assert.deepStrictEqual(resolveGating({ gating: { enabled: true } }).insufficientExempt, ['judge_unconfigured']);
+});
+
+test('an explicit empty insufficientExempt means "exempt nothing" and must survive', () => {
+  const g = resolveGating({ gating: { enabled: true, blockOn: ['INSUFFICIENT EVIDENCE'], insufficientExempt: [] } });
+  assert.deepStrictEqual(g.insufficientExempt, []);
+  assert.strictEqual(gateDecision({ verdict: VERDICTS.INSUFFICIENT, cause: CAUSES.JUDGE_UNCONFIGURED, gating: g }).blocks, true);
+});
+
+// A typo used to fail OPEN: `.includes()` matched nothing, so a repo that believed it
+// had a gate silently had none. Refusing at load is the same call as the strict config
+// parser and assertJailCoherent — never a quiet downgrade.
+test('a typo in blockOn throws instead of silently disabling the gate', () => {
+  assert.throws(
+    () => resolveGating({ gating: { enabled: true, blockOn: ['NOT VERIFIED', 'INSUFFICENT EVIDENCE'] } }),
+    /unrecognized value "INSUFFICENT EVIDENCE"/,
+  );
+});
+
+test('a typo in insufficientExempt throws', () => {
+  assert.throws(
+    () => resolveGating({ gating: { enabled: true, insufficientExempt: ['judge_unconfigured', 'judge_unconfigred'] } }),
+    /gating\.insufficientExempt: unrecognized value "judge_unconfigred"/,
+  );
+});
+
+test('a present-but-wrong-type blockOn throws rather than reverting to the default', () => {
+  assert.throws(() => resolveGating({ gating: { enabled: true, blockOn: 'NOT VERIFIED' } }), /must be an array/);
+  assert.throws(() => resolveGating({ gating: { enabled: true, insufficientExempt: 'fork' } }), /must be an array/);
+});
+
+test('an absent gating block still resolves to the shipped defaults', () => {
+  const g = resolveGating({});
+  assert.strictEqual(g.enabled, false);
+  assert.deepStrictEqual(g.blockOn, ['NOT VERIFIED']);
+  assert.deepStrictEqual(g.insufficientExempt, ['judge_unconfigured']);
+});
+
+test('gating disabled is advisory no matter the cause', () => {
+  const g = resolveGating({ gating: { blockOn: ['NOT VERIFIED', 'INSUFFICIENT EVIDENCE'] } }); // enabled defaults false
+  for (const cause of INSUFFICIENT_CAUSES) {
+    assert.strictEqual(gateDecision({ verdict: VERDICTS.INSUFFICIENT, cause, gating: g }).blocks, false);
+  }
 });
 
 console.log('reusable action (Phase 4)');

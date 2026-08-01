@@ -89,3 +89,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/probe-hook-env-leak.js
+
+  insufficient-bypass:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # No `npm ci`: the probe imports only verdict.js and gating.js, both dependency-free.
+      #
+      # This is a DIFFERENTIAL probe — it runs every INSUFFICIENT EVIDENCE cause through the
+      # real decision path under the shipped default and under a gated config, and fails if a
+      # lane that must close stays open OR a lane that must stay open closes. The unit tests
+      # pin the same table; this job exists so the before/after is visible in CI output rather
+      # than only as a green tick.
+      - name: probe — INSUFFICIENT EVIDENCE bypass lanes
+        run: node scripts/probe-insufficient-bypass.js
