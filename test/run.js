@@ -800,30 +800,48 @@ function stubGitHubFor(baseConfig) {
   return () => { globalThis.fetch = prior; };
 }
 
-atest('run() refuses outright when the base config names an unknown isolation.mode', async () => {
+// repoPath is a temp dir that is deliberately NOT a git repo, and that is what makes these tests
+// prove ORDERING rather than just rejection. The guards run at step 2b, before createSandbox; if
+// one were moved or removed, the run would get as far as `git worktree add` and reject with a git
+// error instead — a different message, so the assertion below fails. That ordering is the point:
+// throwing before the sandbox exists means no worktree of attacker content is ever created and
+// the base repo's post-checkout hook never fires.
+// A package.json so auto-detection can resolve the MECHANICS half (commands still come from
+// head); no `git init`, so createSandbox would fail loudly if it were ever reached.
+function notAGitRepo() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'felix-no-git-'));
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+    name: 'fixture', version: '1.0.0', scripts: { test: 'true' },
+  }));
+  return dir;
+}
+
+atest('run() refuses BEFORE the sandbox when the base config names an unknown isolation.mode', async () => {
   const restore = stubGitHubFor({ isolation: { mode: 'Docker' }, commands: { test: 'true' } });
+  const repoPath = notAGitRepo();
   try {
     await assert.rejects(
-      () => felixRun({ target: 'o/r#1', repoPath: process.cwd(), dryRun: true, post: false, env: { GITHUB_TOKEN: 't' } }),
+      () => felixRun({ target: 'o/r#1', repoPath, dryRun: true, post: false, env: { GITHUB_TOKEN: 't' } }),
       /isolation\.mode/,
-      'a bad mode must abort the run, not proceed with the jail silently off'
+      'a bad mode must abort the run at config load, not proceed with the jail silently off'
     );
-  } finally { restore(); }
+  } finally { restore(); fs.rmSync(repoPath, { recursive: true, force: true }); }
 });
 
-atest('run() refuses outright when docker isolation is combined with drive', async () => {
+atest('run() refuses BEFORE the sandbox when docker isolation is combined with drive', async () => {
   const restore = stubGitHubFor({
     isolation: { mode: 'docker' },
     drive: { enabled: true, startCommand: 'npm start', routes: ['/'] },
     commands: { test: 'true' },
   });
+  const repoPath = notAGitRepo();
   try {
     await assert.rejects(
-      () => felixRun({ target: 'o/r#1', repoPath: process.cwd(), dryRun: true, post: false, env: { GITHUB_TOKEN: 't' } }),
+      () => felixRun({ target: 'o/r#1', repoPath, dryRun: true, post: false, env: { GITHUB_TOKEN: 't' } }),
       /drive/,
       'docker + drive must abort the run, not boot the app on the host'
     );
-  } finally { restore(); }
+  } finally { restore(); fs.rmSync(repoPath, { recursive: true, force: true }); }
 });
 
 console.log('trigger gate + self-error (Phase 2)');
