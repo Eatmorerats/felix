@@ -132,6 +132,71 @@ function resolveIsolation(config = {}) {
   return iso;
 }
 
+/**
+ * Refuse a config whose parts contradict each other.
+ *
+ * Today that is exactly one pair: docker isolation together with a drive plan. `driveApp` boots
+ * the app with a plain `spawn` and never goes through `wrapCommand`, so the PR's own server runs
+ * on the host, outside every cap, while the config says "jailed".
+ *
+ * Refusal rather than a jailed drive, and rather than a soft skip:
+ *  - Jailing it needs a detached container lifecycle with orphan cleanup on every exit path
+ *    (including Felix being SIGKILLed), and publishing a port forces `--network bridge`, which
+ *    hands untrusted code the runtime egress the net-deny test steps deliberately withhold.
+ *    It would still leave Felix's own chromium running `--no-sandbox` on the HOST against
+ *    attacker-served pages. A half-jail would claim containment it does not have.
+ *  - A soft skip is quality-fail-open: the owner declared those routes as hard checks, so
+ *    skipping them lets PRs reach VERIFIED without checks the owner mandated, and they never
+ *    find out.
+ *  - Failing the drive check instead would block, but stamps "failure" on innocent PRs for a
+ *    config problem, which teaches people to distrust the verdict.
+ *
+ * Both blocks are base-sourced (config.js), so this conflict is always owner-authored and the
+ * error is attributed to the party that can actually fix it.
+ */
+function assertJailCoherent({ isolation, hasDrivePlan } = {}) {
+  const iso = isolation || DEFAULT_ISOLATION;
+  assertValidMode(iso.mode);
+  if (iso.mode === 'docker' && hasDrivePlan) {
+    throw new Error(
+      'isolation.mode "docker" and drive are incompatible: drive boots the app with a plain spawn ' +
+      'on the HOST, outside the jail, so the container would be a false assurance. Turn off one of ' +
+      'the two (drive.enabled:false, or isolation.mode:"none"). A jailed drive is future work.'
+    );
+  }
+}
+
+/**
+ * Verify docker actually works BEFORE any PR code is checked out or run.
+ *
+ * The point is attribution by construction. Without this, a runner that has lost docker makes
+ * the wrapped command exit 127, which reads as "the PR's install failed" -> INSUFFICIENT
+ * EVIDENCE -> `neutral` -> and GitHub counts neutral as PASSING a Required check. So the
+ * hardening becomes the bypass, and the comment blames the wrong party. This probe runs zero
+ * lines of PR code, so its failure is provably the runner's fault without parsing exit codes
+ * out of untrusted output.
+ *
+ * `run` is injected so the whole path is testable on a box with no docker.
+ *
+ * Residual, accepted: a daemon that dies mid-run still surfaces as a failed check. Rare, and it
+ * fails in the closed direction.
+ */
+async function preflightDocker({ isolation, run, timeoutMs = 15000 } = {}) {
+  const iso = isolation || DEFAULT_ISOLATION;
+  assertValidMode(iso.mode);
+  if (iso.mode !== 'docker') return { ok: true, skipped: true };
+  const r = await run('docker version --format "{{.Server.Version}}"', { timeoutMs });
+  if (r.code !== 0 || r.timedOut) {
+    throw new Error(
+      `isolation.mode is "docker" but docker is not usable on this runner ` +
+      `(${r.timedOut ? `timed out after ${timeoutMs}ms` : `exit ${r.code}`}): ${String(r.combined || '').slice(0, 300)}. ` +
+      'Refusing to run: falling back to host execution would silently drop the sandbox, and ' +
+      'reporting it as a failed install would blame the pull request for a runner problem.'
+    );
+  }
+  return { ok: true, skipped: false, version: String(r.combined || '').trim() };
+}
+
 /** Single-quote a string for safe embedding in `sh -c '...'`. */
 function shquote(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
@@ -194,4 +259,7 @@ function wrapCommand(command, { isolation, cwd, network } = {}) {
   return parts.join(' ');
 }
 
-module.exports = { resolveIsolation, wrapCommand, shquote, DEFAULT_ISOLATION, IMAGE_BY_LANGUAGE };
+module.exports = {
+  resolveIsolation, wrapCommand, shquote, assertJailCoherent, preflightDocker,
+  DEFAULT_ISOLATION, IMAGE_BY_LANGUAGE, MODES, CACHE_ENV,
+};

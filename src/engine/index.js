@@ -15,6 +15,9 @@ const { loadConfig, resolveWorkdir, CONFIG_FILENAME } = require('./config');
 const { buildSpec, linkedIssueNumbers } = require('./spec');
 const { createSandbox } = require('./sandbox');
 const { runTier1 } = require('./tier1');
+const { resolveIsolation, assertJailCoherent, preflightDocker } = require('./isolation');
+const { buildDrivePlan } = require('./drive');
+const { run: execRun } = require('./util/exec');
 const { createJudge } = require('./judge');
 const { compose, conclusionFor } = require('./verdict');
 const { resolveGating, gateDecision } = require('./gating');
@@ -167,6 +170,23 @@ async function run(opts) {
   // (2) Learn / load config.
   logger.step(2, 'loading config');
   const { config, source: configSource, detected } = await loadConfig({ repoPath, fetchBaseConfig });
+
+  // (2b) The jail is checked HERE — before triage, before the sandbox worktree exists, and
+  // before a single line of PR code is fetched. Two things are established, both of which throw
+  // rather than degrade:
+  //
+  //   - the isolation block is coherent (a valid mode, and not docker-plus-drive, which would
+  //     boot the PR's app on the host outside the jail), and
+  //   - if it asks for docker, docker actually answers on this runner.
+  //
+  // Throwing is the only outcome that is fail-closed under BOTH gating setups. It exits 3, so
+  // the job goes red, and it never reaches `finalize`, so no check run is created and a Required
+  // check cannot go green. The tempting alternative — carry on and report INSUFFICIENT EVIDENCE
+  // — maps to `neutral`, which GitHub counts as PASSING. `reportError` still posts a diagnostic
+  // comment naming the real culprit, so this is loud rather than silent.
+  const isolation = resolveIsolation(config);
+  assertJailCoherent({ isolation, hasDrivePlan: buildDrivePlan(config) !== null });
+  await preflightDocker({ isolation, run: execRun });
 
   // (3) Triage.
   logger.step(3, 'triage');

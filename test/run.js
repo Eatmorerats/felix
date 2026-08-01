@@ -34,7 +34,7 @@ const {
 const picomatchLib = require('picomatch');
 const { parseTarget } = require('../src/engine/github');
 const { render } = require('../src/engine/comment');
-const { triageFiles, triggerGate, NEVER_SKIP, baseConfigFetcher } = require('../src/engine');
+const { triageFiles, triggerGate, NEVER_SKIP, baseConfigFetcher, run: felixRun } = require('../src/engine');
 const { resolveIsolation, wrapCommand, assertJailCoherent, preflightDocker } = require('../src/engine/isolation');
 const { renderError } = require('../src/engine/comment');
 const { computeMetrics, OUTCOMES } = require('../src/engine/calibration');
@@ -768,6 +768,62 @@ atest('the preflight never runs in mode none, and passes when docker answers', a
   assert.strictEqual(calls, 0, 'mode none must not shell out to docker at all');
   await preflightDocker({ isolation: resolveIsolation({ isolation: { mode: 'docker' } }), run: spy });
   assert.strictEqual(calls, 1);
+});
+
+// These two exist because the unit tests above do NOT prove the guards are reachable. Measured:
+// commenting out both calls in index.js left 271 passed / 0 failed — the whole fix would have
+// shipped as dead code. So this drives the real run() and asserts it REJECTS, which is also the
+// property that matters at the gate: a rejection never reaches finalize(), so no check run is
+// created and a Required check cannot go green.
+function stubGitHubFor(baseConfig) {
+  const prior = globalThis.fetch;
+  const pr = {
+    number: 1, title: 'add a thing', body: 'closes #2', draft: false,
+    head: { sha: 'headsha', repo: { fork: false, full_name: 'o/r' } },
+    base: { sha: 'basesha', ref: 'main', repo: { full_name: 'o/r' } },
+    labels: [],
+  };
+  const reply = (body, type) => ({
+    ok: true, status: 200,
+    headers: { get: () => (type === 'json' ? 'application/json' : 'text/plain') },
+    json: async () => body,
+    text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
+  });
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (/\/contents\/felix\.config\.json/.test(u)) return reply(JSON.stringify(baseConfig), 'text');
+    if (/\/contents\?ref=/.test(u)) return reply([{ name: 'felix.config.json', type: 'file' }], 'json');
+    if (/\/files/.test(u)) return reply([{ filename: 'src/a.js', status: 'modified', additions: 3, deletions: 0 }], 'json');
+    if (/\/pulls\/1$/.test(u)) return reply(pr, 'json');
+    return reply({}, 'json');
+  };
+  return () => { globalThis.fetch = prior; };
+}
+
+atest('run() refuses outright when the base config names an unknown isolation.mode', async () => {
+  const restore = stubGitHubFor({ isolation: { mode: 'Docker' }, commands: { test: 'true' } });
+  try {
+    await assert.rejects(
+      () => felixRun({ target: 'o/r#1', repoPath: process.cwd(), dryRun: true, post: false, env: { GITHUB_TOKEN: 't' } }),
+      /isolation\.mode/,
+      'a bad mode must abort the run, not proceed with the jail silently off'
+    );
+  } finally { restore(); }
+});
+
+atest('run() refuses outright when docker isolation is combined with drive', async () => {
+  const restore = stubGitHubFor({
+    isolation: { mode: 'docker' },
+    drive: { enabled: true, startCommand: 'npm start', routes: ['/'] },
+    commands: { test: 'true' },
+  });
+  try {
+    await assert.rejects(
+      () => felixRun({ target: 'o/r#1', repoPath: process.cwd(), dryRun: true, post: false, env: { GITHUB_TOKEN: 't' } }),
+      /drive/,
+      'docker + drive must abort the run, not boot the app on the host'
+    );
+  } finally { restore(); }
 });
 
 console.log('trigger gate + self-error (Phase 2)');
