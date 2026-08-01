@@ -28,8 +28,14 @@ const NETWORKS = ['allow', 'deny'];
 //
 // `--read-only` puts / on the read-only layer, and `-u <uid>:<gid>` names a uid with no
 // /etc/passwd entry, so the container's HOME resolves to `/`. Every toolchain that caches under
-// $HOME then dies with EROFS — including `npm ci`, the default install command, which means
-// docker mode has most likely never completed an install for a Node repo.
+// $HOME then dies — including `npm ci`, the default install command, which means docker mode
+// had never once completed an install for a Node repo. Observed, not theorised: the CI probe's
+// control run (scripts/probe-docker-jail.js, docker 28.0.4) fails in 884ms with
+//   npm error syscall mkdir / npm error path /.npm / ENOENT ... mkdir '/.npm'
+//   npm error Log files were not written ... /.npm/_logs
+// Note the errno is ENOENT, not the EROFS you would predict — the read-only layer refuses the
+// mkdir at `/` before any write is attempted. Same cause, different name; worth writing down
+// because someone debugging this will grep for the wrong one.
 //
 // These point into the /tmp tmpfs that already exists rather than adding a mount, so the jail is
 // not widened by a single byte: the values are fixed strings with nothing interpolated, so they

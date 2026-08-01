@@ -364,8 +364,9 @@ If a repo is running one of these today it is not jailed, whatever its config sa
 one line; the error message tells you which.
 
 Docker mode also sets `HOME`, `XDG_CACHE_HOME`, `npm_config_cache`, `GOPATH` and `CARGO_HOME`
-into the `/tmp` tmpfs. Without that, the read-only root left `HOME=/` and `npm ci` could not
-write its cache — so docker mode had most likely never completed a Node install. Two consequences
+into the `/tmp` tmpfs. Without that, the read-only root left `HOME=/` and `npm ci` died on `mkdir '/.npm'` — so docker
+mode had never once completed a Node install. That is measured, not assumed: `npm run test:jail`
+runs a real install in a real container *and* runs the pre-fix shape as a control that must fail. Two consequences
 worth knowing: a test that reads `HOME` sees `/tmp`, and the package caches now count against
 `isolation.tmpfsSize` (default raised `512m` → `1g`; raise it further for a heavy install).
 

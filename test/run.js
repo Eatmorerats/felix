@@ -700,8 +700,10 @@ test('the two supported modes still work and are the only ones', () => {
 
 // F14. `--read-only` + `-u <uid>:<gid>` for a uid with no /etc/passwd entry leaves container
 // HOME at `/`, which is on the read-only layer. npm writes its cache and _logs under $HOME,
-// so `npm ci` — the default install command — dies with EROFS. Docker mode has therefore
-// probably never completed an install for a Node repo. Same class for pip, go and cargo,
+// so `npm ci` — the default install command — dies on `mkdir '/.npm'`. Docker mode had therefore
+// never once completed an install for a Node repo; confirmed live by the CI probe's control run,
+// which fails in 884ms. The errno is ENOENT, not the EROFS you would predict — the read-only
+// layer refuses the mkdir at `/` before any write is attempted. Same class for pip, go and cargo,
 // which is why the fix is a writable HOME rather than an npm-specific flag.
 test('docker mode gives the container a writable HOME', () => {
   const iso = resolveIsolation({ isolation: { mode: 'docker' } });
@@ -716,7 +718,7 @@ test('docker mode gives the container a writable HOME', () => {
 });
 
 // The per-language caches live outside HOME for some toolchains, so a writable HOME alone is
-// not enough — each must be pointed somewhere writable or the same EROFS returns wearing a
+// not enough — each must be pointed somewhere writable or the same failure returns wearing a
 // different name.
 test('docker mode redirects the per-language package caches somewhere writable', () => {
   const iso = resolveIsolation({ isolation: { mode: 'docker' } });
