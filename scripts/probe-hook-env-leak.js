@@ -118,7 +118,10 @@ async function attempt(label, opts, { repo, dumpPath }, i) {
   const secretish = Object.keys(process.env).filter((k) => /TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL/i.test(k));
   const survivors = secretish.filter((k) => new RegExp(`^${k}=`, 'm').test(post.dump));
   console.log(`   checked ${secretish.length} secret-shaped name(s) from this process against the hook env`);
-  if (secretish.length < 1) console.log('   (note: none present here — this control is weak on a bare dev box)');
+  // 1 == only the token this probe planted itself, which proves very little. CI exports a real
+  // GITHUB_TOKEN into this step precisely to get above that; say so loudly if it stops arriving,
+  // otherwise the control silently decays back to checking our own fixture.
+  if (secretish.length < 2) console.log('   (note: only this probe\'s own planted name — WEAK control, expected >1 in CI)');
   if (survivors.length) {
     console.error(`\nALLOWLIST HOLE: these reached the hook by name — ${survivors.join(', ')}`);
     failures++;
