@@ -36,12 +36,16 @@ const { VERDICTS, INSUFFICIENT_CAUSES } = require('./verdict');
 const VALID_BLOCK_ON = Object.freeze(Object.values(VERDICTS));
 
 const DEFAULT_GATING = {
+  // Gating stays OFF by default — Felix is advisory unless a repo asks otherwise. That is
+  // what bounds the blast radius of the blockOn default below: it can only affect a repo
+  // that has already said, explicitly, "Felix gates my merges."
   enabled: false,
-  // NOTE: today's shipped default, deliberately unchanged by the attribution work.
-  // Adding 'INSUFFICIENT EVIDENCE' here is what closes the bypass lane for repos that
-  // gate on Felix; it is a product decision about every adopter, so it is made
-  // explicitly rather than as a side effect. See docs/gating.md.
-  blockOn: ['NOT VERIFIED'],
+  // A gate that passes on "I could not verify this" is not a gate. Every cause of an
+  // insufficiency that a PR can actually drive is a way to merge unverified, so gating on
+  // the verdict includes it by default and `insufficientExempt` carves back out the one
+  // cause no PR can reach. An adopter who wants the old behaviour writes
+  // `"blockOn": ["NOT VERIFIED"]` — an explicit value is always preserved verbatim.
+  blockOn: ['NOT VERIFIED', 'INSUFFICIENT EVIDENCE'],
   // Only consulted when INSUFFICIENT EVIDENCE is in blockOn. `judge_unconfigured` is
   // the sole cause no head content can reach — it means the ADOPTER has no judge key,
   // so blocking on it would redden every PR in a repo that turned gating on before

@@ -175,20 +175,23 @@ depth) and `.github/workflows/**` are always treated as behavioural, whatever `s
 the base that everything above trusts. The practical effect: **dependency-bump PRs now get
 fully verified instead of skipped.** That is intended; a lockfile bump is behavioural.
 
-> **Marking the check Required?** Set this in the base config:
+> **Marking the check Required?** Just turn gating on in the base config:
 >
 > ```json
-> "gating": {
->   "enabled": true,
->   "blockOn": ["NOT VERIFIED", "INSUFFICIENT EVIDENCE"],
->   "insufficientExempt": ["judge_unconfigured"]
-> }
+> "gating": { "enabled": true }
 > ```
 >
-> GitHub counts `neutral` and `skipped` as *passing*, and INSUFFICIENT EVIDENCE maps to
-> `neutral` — so with the default `blockOn` a PR with no acceptance criteria, a broken
-> install, or a fork PR does not block. The trust boundary makes the policy honest; it
-> does not by itself make the gate hard.
+> which resolves to `blockOn: ["NOT VERIFIED", "INSUFFICIENT EVIDENCE"]` and
+> `insufficientExempt: ["judge_unconfigured"]`.
+>
+> Insufficiency is in the default `blockOn` because GitHub counts `neutral` and `skipped`
+> as *passing*, and INSUFFICIENT EVIDENCE maps to `neutral` — so a gate that ignores it
+> lets a PR with no acceptance criteria, a broken install, or a fork PR merge unverified.
+> A gate that passes on "I could not verify this" is not a gate.
+>
+> **Gating is still off by default**, so this changes nothing for advisory adopters. To keep
+> the older, looser behaviour on a repo that already gates, write it out explicitly —
+> `"blockOn": ["NOT VERIFIED"]` — and an explicit value is always preserved verbatim.
 
 #### Why insufficiency is not one thing
 

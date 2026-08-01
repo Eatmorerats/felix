@@ -1427,11 +1427,17 @@ test('an adopter can exempt a cause they accept — e.g. a fork-heavy repo', () 
 // ── migration ────────────────────────────────────────────────────────────────
 console.log('gating — migration and config validation');
 
-test('an existing explicit blockOn is preserved verbatim', () => {
+// Load-bearing since the default now includes INSUFFICIENT EVIDENCE: an adopter who wrote
+// their blockOn out by hand must keep exactly what they wrote. Spread order gives them that,
+// but "the default silently widened an explicit config" is the regression this pins.
+test('an existing explicit blockOn is preserved verbatim and is NOT widened by the new default', () => {
   const g = resolveGating({ gating: { enabled: true, blockOn: ['NOT VERIFIED'] } });
   assert.deepStrictEqual(g.blockOn, ['NOT VERIFIED']);
-  // Insufficiency keeps passing for them until they opt in — no surprise breakage.
+  // Insufficiency keeps passing for them until they opt in — no surprise breakage on upgrade.
   assert.strictEqual(gateDecision({ verdict: VERDICTS.INSUFFICIENT, cause: CAUSES.INSTALL_FAILED, gating: g }).blocks, false);
+  assert.strictEqual(gateDecision({ verdict: VERDICTS.INSUFFICIENT, cause: CAUSES.FORK, gating: g }).blocks, false);
+  // ...and NOT VERIFIED still blocks, so they have not silently lost their gate either.
+  assert.strictEqual(gateDecision({ verdict: 'NOT VERIFIED', cause: CAUSES.CRITERIA_UNMET, gating: g }).blocks, true);
 });
 
 test('insufficientExempt defaults to judge_unconfigured when absent', () => {
@@ -1468,9 +1474,25 @@ test('a present-but-wrong-type blockOn throws rather than reverting to the defau
 
 test('an absent gating block still resolves to the shipped defaults', () => {
   const g = resolveGating({});
+  // enabled:false is what bounds the blast radius of the blockOn default — a repo that
+  // never asked for gating is still advisory, so nothing below can redden it.
   assert.strictEqual(g.enabled, false);
-  assert.deepStrictEqual(g.blockOn, ['NOT VERIFIED']);
+  assert.deepStrictEqual(g.blockOn, ['NOT VERIFIED', 'INSUFFICIENT EVIDENCE']);
   assert.deepStrictEqual(g.insufficientExempt, ['judge_unconfigured']);
+});
+
+test('the shipped default closes every attacker-reachable lane and only that', () => {
+  // The default IS the security property now, so pin it directly rather than inferring it
+  // from a hand-built config. If someone widens insufficientExempt or drops INSUFFICIENT
+  // EVIDENCE from blockOn, this is the test that says so.
+  const g = resolveGating({ gating: { enabled: true } });
+  const mustBlock = [CAUSES.INSTALL_FAILED, CAUSES.NO_SPEC, CAUSES.FORK, CAUSES.JUDGE_ERROR, CAUSES.JUDGE_UNAVAILABLE_UNKNOWN];
+  for (const cause of mustBlock) {
+    assert.strictEqual(gateDecision({ verdict: VERDICTS.INSUFFICIENT, cause, gating: g }).blocks, true,
+      `${cause} must block under the shipped default`);
+  }
+  assert.strictEqual(gateDecision({ verdict: VERDICTS.INSUFFICIENT, cause: CAUSES.JUDGE_UNCONFIGURED, gating: g }).blocks, false,
+    'judge_unconfigured must stay exempt — no contributor can fix a missing adopter key');
 });
 
 test('gating disabled is advisory no matter the cause', () => {

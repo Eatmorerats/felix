@@ -79,8 +79,13 @@ const CONTROL = {
   },
 };
 
-const BEFORE = resolveGating({ gating: { enabled: true } });
-const AFTER = resolveGating({ gating: { enabled: true, blockOn: ['NOT VERIFIED', 'INSUFFICIENT EVIDENCE'] } });
+// BEFORE names the legacy blockOn EXPLICITLY rather than relying on the default. The default
+// now includes INSUFFICIENT EVIDENCE, so `resolveGating({enabled:true})` would resolve to the
+// AFTER config and the two columns would collapse into each other — a probe that compares a
+// thing to itself and reports success. It is also the config an existing adopter still has on
+// disk, so this column is the real upgrade baseline, not a synthetic one.
+const BEFORE = resolveGating({ gating: { enabled: true, blockOn: ['NOT VERIFIED'] } });
+const AFTER = resolveGating({ gating: { enabled: true } });
 
 function drive(args, gating) {
   const v = compose(args);
