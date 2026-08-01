@@ -90,20 +90,42 @@ function subst(cmd, file) {
   return cmd.replace(/\{file\}/g, file);
 }
 
-async function runCheck({ name, hard, cmd, cwd, env, timeoutMs, isolation, network }) {
+/**
+ * `expect` (used by smoke) is a substring the command's output MUST contain. It is matched
+ * against the FULL captured output, never against the stored `output` field — that field is
+ * tail(combined, 4000), so a build that prints "Listening on" first and then 50KB of bundler
+ * noise would fail a perfectly correct expectation.
+ */
+async function runCheck({ name, hard, cmd, cwd, env, timeoutMs, isolation, network, expect = '' }) {
+  const wanted = (expect || '').trim();
   if (!cmd || !cmd.trim()) {
+    // A hard SKIP does not gate — verdict.js counts only `hard && status === 'fail'`. So an
+    // expectation with nothing to assert against must FAIL, or it evaporates silently.
+    if (wanted) {
+      return {
+        name, tier: 1, status: 'fail', hard,
+        detail: `smoke.expect is configured (${JSON.stringify(wanted)}) but commands.smoke is empty — nothing to assert against`,
+        output: '',
+      };
+    }
     return { name, tier: 1, status: 'skip', hard, detail: 'no command configured', output: '' };
   }
   const finalCmd = wrapCommand(cmd, { isolation, cwd, network });
   logger.step('T1', `${name}: ${cmd}${isolation && isolation.mode === 'docker' ? ' [docker]' : ''}`);
   const r = await run(finalCmd, { cwd, env, timeoutMs });
-  const pass = r.code === 0 && !r.timedOut;
+  const exited = r.code === 0 && !r.timedOut;
+  const matched = !wanted || String(r.combined || '').includes(wanted);
+  let detail;
+  if (r.timedOut) detail = `timed out after ${timeoutMs}ms`;
+  else if (!exited) detail = `exit ${r.code} in ${r.durationMs}ms`;
+  else if (!matched) detail = `exit 0 in ${r.durationMs}ms but the expected output ${JSON.stringify(wanted)} was not found`;
+  else detail = `exit ${r.code} in ${r.durationMs}ms`;
   return {
     name,
     tier: 1,
-    status: pass ? 'pass' : 'fail',
+    status: exited && matched ? 'pass' : 'fail',
     hard,
-    detail: r.timedOut ? `timed out after ${timeoutMs}ms` : `exit ${r.code} in ${r.durationMs}ms`,
+    detail,
     output: tail(r.combined, 4000),
   };
 }
@@ -160,16 +182,59 @@ function changedTestFiles(files, config) {
     .map((f) => f.filename);
 }
 
-async function runTier1({ cwd, env, config, files, repoPath, baseSha, headSha, filesAll }) {
+async function runTier1({ cwd, repoRoot, env, config, files, repoPath, baseSha, headSha, filesAll }) {
   const c = config.commands || {};
   const t = config.timeouts || {};
   const isolation = resolveIsolation(config);
+  // Changed-file paths from the GitHub API are REPO-ROOT-relative, but `cwd` has been
+  // resolved through config.workdir. Joining them under a workdir points at a directory
+  // that does not exist, every read throws, and the scan reports a clean pass. Default to
+  // cwd so the (overwhelmingly common) workdir:"." case is byte-identical.
+  //
+  // The fallback is fail-closed where it matters. With workdir ".", cwd IS the repo root and
+  // defaulting is exactly right. With a workdir set, defaulting would silently scan a
+  // directory the changed files do not live in and report a clean pass — so refuse instead.
+  // A caller that forgets to thread repoRoot gets a loud error, not a blind gate.
+  const workdir = ((config.workdir || '.') + '').trim();
+  if (!repoRoot && workdir && workdir !== '.') {
+    throw new Error(
+      `runTier1: config.workdir is ${JSON.stringify(workdir)} but no repoRoot was supplied. `
+      + 'Changed-file paths are repo-root-relative; scanning from the workdir would read nothing '
+      + 'and report "no secrets in changed files". Pass repoRoot (the sandbox root).'
+    );
+  }
+  const scanRoot = repoRoot || cwd;
   // Opt-in "drive" step (R1): boot the app + probe routes. When enabled, a build
   // failure means we can't boot, so the build is promoted to a HARD gate below.
   const drivePlan = buildDrivePlan(config);
   const results = [];
   if (isolation.mode === 'docker') {
     logger.info(`isolation: docker (${isolation.image}, net-deny except install)`);
+  }
+
+  // ── Secrets FIRST, before a single line of PR code runs. ───────────────────────────────
+  // The sandbox worktree at this point IS the head commit, byte for byte — `git worktree
+  // add --detach <headSha>` just wrote it and nothing since has executed. Every later step
+  // (install, build, test, lint…) runs the PR's own scripts, and any of them can rewrite the
+  // file the scan is about to read. Gathering this evidence last meant a PR could plant a
+  // real key and `sed` it away in its own postinstall.
+  //
+  // The external scanner moves too, and that is the load-bearing half: `install` runs the
+  // PR's postinstall, so ANY position after install is equally bypassable. If a repo's
+  // scanner only exists after `npm install`, then the party being gated supplies the gate —
+  // that configuration was never sound. Note the external scan already ran with network
+  // 'deny', so a fetch-on-demand `npx <scanner>` never worked in docker mode either.
+  const secretsCfg = config.secrets || {};
+  const externalScan = (secretsCfg.externalScan || '').trim();
+  if (externalScan) {
+    results.push(await runCheck({
+      name: 'secrets scan (external)', hard: true, cmd: externalScan, cwd, env,
+      timeoutMs: t.testMs || 600000, isolation, network: 'deny',
+    }));
+    // Felix defers rather than double-gating (R4) — the external scanner is the gate.
+    results.push(scanSecrets({ cwd: scanRoot, files, secretsCfg, hard: false }));
+  } else {
+    results.push(scanSecrets({ cwd: scanRoot, files, secretsCfg }));
   }
 
   // Install is the only step allowed network access (to fetch dependencies).
@@ -182,7 +247,10 @@ async function runTier1({ cwd, env, config, files, repoPath, baseSha, headSha, f
   // If install failed there's no point running the rest — bail with skips.
   if (install.status === 'fail') {
     logger.warn('install failed — skipping build/test (INSUFFICIENT EVIDENCE territory)');
-    for (const name of ['build/smoke', 'test', 'secrets scan']) {
+    // 'secrets scan' is deliberately NOT in this list — the real scan already ran, above.
+    // Re-adding it here would emit a second row with the same name, a `skip` claiming
+    // "install failed" sitting next to a genuine `fail`.
+    for (const name of ['build/smoke', 'test']) {
       results.push({ name, tier: 1, status: 'skip', hard: name === 'test', detail: 'install failed', output: '' });
     }
     return { results, installFailed: true };
@@ -192,10 +260,14 @@ async function runTier1({ cwd, env, config, files, repoPath, baseSha, headSha, f
     results.push(await runCheck({ name: 'preTest', hard: true, cmd: c.preTest, cwd, env, timeoutMs: t.testMs || 600000, isolation, network: 'deny' }));
   }
 
+  // smoke.expect is now ASSERTED, not merely a switch that promotes the build to hard.
+  // It is a wiring/liveness check, NOT a security control — the output it matches against
+  // is produced by the code under review, so `echo "Listening on"` satisfies it.
   const smokeExpect = (config.smoke && config.smoke.expect) || '';
   results.push(await runCheck({
     name: 'build/smoke', hard: Boolean((smokeExpect && smokeExpect.trim()) || drivePlan),
     cmd: c.smoke, cwd, env, timeoutMs: (config.smoke && config.smoke.timeoutMs) || 60000, isolation, network: 'deny',
+    expect: smokeExpect,
   }));
 
   const testResult = await runCheck({ name: 'test', hard: true, cmd: c.test, cwd, env, timeoutMs: t.testMs || 600000, isolation, network: 'deny' });
@@ -259,20 +331,7 @@ async function runTier1({ cwd, env, config, files, repoPath, baseSha, headSha, f
     }
   }
 
-  // Secrets. If the repo opts into an authoritative external scanner (e.g. gitleaks), run it
-  // as the HARD gate and demote Felix's built-in changed-files scan to an advisory backstop —
-  // Felix defers rather than double-gating (R4). Otherwise the built-in scan is the gate.
-  const secretsCfg = config.secrets || {};
-  const externalScan = (secretsCfg.externalScan || '').trim();
-  if (externalScan) {
-    results.push(await runCheck({
-      name: 'secrets scan (external)', hard: true, cmd: externalScan, cwd, env,
-      timeoutMs: t.testMs || 600000, isolation, network: 'deny',
-    }));
-    results.push(scanSecrets({ cwd, files, secretsCfg, hard: false }));
-  } else {
-    results.push(scanSecrets({ cwd, files, secretsCfg }));
-  }
+  // (Secrets ran FIRST — see the top of this function for why.)
 
   return { results, installFailed: false };
 }

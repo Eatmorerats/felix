@@ -19,7 +19,7 @@ const { compose, VERDICTS, conclusionFor } = require('../src/engine/verdict');co
 const {
   estimateTokens, tokensToChars, splitDiffByFile, packChunks, planJudgeCalls, paceMs,
 } = require('../src/engine/budget');
-const { scanSecrets, shannonEntropy, looksLikeRealSecret } = require('../src/engine/tier1');
+const { scanSecrets, shannonEntropy, looksLikeRealSecret, runTier1 } = require('../src/engine/tier1');
 const {
   parseAddedLines, matchCoverageKey, attributeStatements, functionCoverage, crapScore,
   methodIsChanged, analyzeFileParsed, coverageAllZero, isLikelyGenerated, buildCrapRow,
@@ -551,6 +551,179 @@ test('scanSecrets stays hard by default (no external scanner configured)', () =>
 test('DEFAULT_SECRETS carries an empty externalScan (opt-in); merge preserves a user value', () => {
   assert.strictEqual(merge({}, {}).secrets.externalScan, '');
   assert.strictEqual(merge({}, { secrets: { externalScan: 'gitleaks detect --no-git' } }).secrets.externalScan, 'gitleaks detect --no-git');
+});
+
+// ── Tier 1 evidence integrity (F10, F10b, smoke.expect) ──────────────────────────────────
+// These drive runTier1 END TO END on purpose. Unit-testing scanSecrets in isolation cannot
+// see any of these bugs: in every case the function is correct and the CALL SITE is wrong.
+console.log('tier1 evidence integrity — the scan must inspect what it claims to');
+
+// Split so this file never contains a literal Felix's own scanner would flag.
+const AWS_SHAPED = 'AKIA' + 'IOSFODNN7EXAMPLE';
+
+/** A minimal repo runTier1 will accept: package.json + whatever else the case needs. */
+function tier1Repo(extra = {}) {
+  const d = tmpdir();
+  fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ name: 'fixture', version: '1.0.0' }));
+  for (const [rel, body] of Object.entries(extra)) {
+    fs.mkdirSync(path.join(d, path.dirname(rel)), { recursive: true });
+    fs.writeFileSync(path.join(d, rel), body);
+  }
+  return d;
+}
+const NO_CMDS = { install: '', smoke: '', test: '', preTest: '', lint: '', typecheck: '', testOne: '' };
+const idxOf = (results, name) => results.findIndex((r) => r.name === name);
+const rowsNamed = (results, name) => results.filter((r) => r.name === name);
+
+atest('F10: a PR that erases its own planted secret during install is still caught', async () => {
+  // The attack: plant a real key, then scrub it from disk in a step that runs before the scan.
+  const d = tier1Repo({
+    'leak.js': `const key = '${AWS_SHAPED}';\n`,
+    'scrub.js': "const fs=require('fs');fs.writeFileSync('leak.js','const key = 1;\\n');\n",
+  });
+  const files = [{ filename: 'leak.js', status: 'modified' }, { filename: 'scrub.js', status: 'added' }];
+  const { results } = await runTier1({
+    cwd: d, repoRoot: d, env: process.env, files, filesAll: files,
+    repoPath: d, baseSha: 'HEAD', headSha: 'HEAD',
+    config: { commands: { ...NO_CMDS, install: 'node scrub.js' }, timeouts: {}, smoke: {}, secrets: {} },
+  });
+
+  // Anti-vacuity: the scrub MUST actually have happened. Without this the test would pass
+  // for the wrong reason if the install command silently failed to run at all.
+  assert.strictEqual(fs.readFileSync(path.join(d, 'leak.js'), 'utf8').trim(), 'const key = 1;',
+    'the install step did not scrub the file — this test is not exercising the attack');
+
+  const scan = rowsNamed(results, 'secrets scan');
+  assert.strictEqual(scan.length, 1, 'exactly one secrets scan row');
+  assert.strictEqual(scan[0].status, 'fail', 'the scrubbed secret must still be reported');
+  assert.strictEqual(scan[0].hard, true);
+  assert.ok(idxOf(results, 'secrets scan') < idxOf(results, 'install'),
+    'the scan must run BEFORE install, not merely eventually');
+});
+
+atest('F10: the external scanner is also gathered before install runs', async () => {
+  const d = tier1Repo({ 'order.js': 'const x = 1;\n' });
+  const files = [{ filename: 'order.js', status: 'modified' }];
+  const { results } = await runTier1({
+    cwd: d, repoRoot: d, env: process.env, files, filesAll: files,
+    repoPath: d, baseSha: 'HEAD', headSha: 'HEAD',
+    config: {
+      commands: { ...NO_CMDS, install: 'node -v' }, timeouts: {}, smoke: {},
+      secrets: { externalScan: 'node -e "process.exit(0)"' },
+    },
+  });
+  assert.ok(idxOf(results, 'secrets scan (external)') < idxOf(results, 'install'),
+    'the HARD secrets gate must not run after attacker code has had a turn');
+  // The built-in stays as an advisory backstop, and is not double-gated.
+  assert.strictEqual(rowsNamed(results, 'secrets scan')[0].hard, false);
+});
+
+atest('F10b: a repo with a workdir still gets a real secrets scan (it had none)', async () => {
+  // f.filename is repo-root-relative; cwd is workdir-resolved. Joining them looks in a
+  // directory that does not exist, and `catch { continue }` turns that into a clean pass.
+  const root = tier1Repo({ 'src/creds.js': `const key = '${AWS_SHAPED}';\n`, 'app/package.json': '{"name":"app"}' });
+  const files = [{ filename: 'src/creds.js', status: 'modified' }];
+  const { results } = await runTier1({
+    cwd: path.join(root, 'app'), repoRoot: root, env: process.env, files, filesAll: files,
+    repoPath: root, baseSha: 'HEAD', headSha: 'HEAD',
+    config: { commands: { ...NO_CMDS }, timeouts: {}, smoke: {}, secrets: {} },
+  });
+  const scan = rowsNamed(results, 'secrets scan')[0];
+  assert.strictEqual(scan.status, 'fail',
+    'the changed file lives at the repo root — the scan must read it there, not under workdir');
+});
+
+atest('a failed install still yields exactly one secrets scan row, and it is the real one', async () => {
+  const d = tier1Repo({ 'leak.js': `const key = '${AWS_SHAPED}';\n` });
+  const files = [{ filename: 'leak.js', status: 'modified' }];
+  const { results, installFailed } = await runTier1({
+    cwd: d, repoRoot: d, env: process.env, files, filesAll: files,
+    repoPath: d, baseSha: 'HEAD', headSha: 'HEAD',
+    config: { commands: { ...NO_CMDS, install: 'node -e "process.exit(1)"' }, timeouts: {}, smoke: {}, secrets: {} },
+  });
+  assert.strictEqual(installFailed, true);
+  const scan = rowsNamed(results, 'secrets scan');
+  assert.strictEqual(scan.length, 1, 'the install-failure placeholders must not duplicate the real row');
+  assert.strictEqual(scan[0].status, 'fail', 'the real scan already ran — it is not a skip');
+});
+
+console.log('tier1 — smoke.expect is actually asserted');
+
+atest('smoke.expect passes when the string is in the output', async () => {
+  const d = tier1Repo({ 'build.js': "console.log('Listening on 4173');\n" });
+  const { results } = await runTier1({
+    cwd: d, repoRoot: d, env: process.env, files: [], filesAll: [],
+    repoPath: d, baseSha: 'HEAD', headSha: 'HEAD',
+    config: { commands: { ...NO_CMDS, smoke: 'node build.js' }, timeouts: {}, smoke: { expect: 'Listening on' }, secrets: {} },
+  });
+  assert.strictEqual(rowsNamed(results, 'build/smoke')[0].status, 'pass');
+});
+
+atest('smoke.expect FAILS when the string is absent, even on exit 0', async () => {
+  const d = tier1Repo({ 'build.js': "console.log('build finished with 0 errors');\n" });
+  const { results } = await runTier1({
+    cwd: d, repoRoot: d, env: process.env, files: [], filesAll: [],
+    repoPath: d, baseSha: 'HEAD', headSha: 'HEAD',
+    config: { commands: { ...NO_CMDS, smoke: 'node build.js' }, timeouts: {}, smoke: { expect: 'Listening on' }, secrets: {} },
+  });
+  const smoke = rowsNamed(results, 'build/smoke')[0];
+  assert.strictEqual(smoke.status, 'fail');
+  assert.strictEqual(smoke.hard, true, 'a configured expectation is a hard gate');
+  assert.match(smoke.detail, /Listening on/, 'the detail must name the string that was missing');
+});
+
+atest('smoke.expect matches against the FULL output, not the truncated tail', async () => {
+  // The expected line is printed FIRST and then buried under noise. runCheck stores only
+  // tail(combined, 4000) — asserting against that would fail a perfectly correct build.
+  const d = tier1Repo({
+    'build.js': "console.log('Listening on 4173');\nconsole.log('x'.repeat(10000));\n",
+  });
+  const { results } = await runTier1({
+    cwd: d, repoRoot: d, env: process.env, files: [], filesAll: [],
+    repoPath: d, baseSha: 'HEAD', headSha: 'HEAD',
+    config: { commands: { ...NO_CMDS, smoke: 'node build.js' }, timeouts: {}, smoke: { expect: 'Listening on' }, secrets: {} },
+  });
+  const smoke = rowsNamed(results, 'build/smoke')[0];
+  assert.ok(!smoke.output.includes('Listening on'), 'precondition: the line is off the end of the stored tail');
+  assert.strictEqual(smoke.status, 'pass', 'a build that printed the string early must still pass');
+});
+
+atest('smoke.expect set with no smoke command FAILS rather than skipping silently', async () => {
+  // A hard SKIP does not gate (verdict.js filters on hard && status === "fail"), so the
+  // old shape let a configured expectation evaporate.
+  const d = tier1Repo();
+  const { results } = await runTier1({
+    cwd: d, repoRoot: d, env: process.env, files: [], filesAll: [],
+    repoPath: d, baseSha: 'HEAD', headSha: 'HEAD',
+    config: { commands: { ...NO_CMDS }, timeouts: {}, smoke: { expect: 'Listening on' }, secrets: {} },
+  });
+  const smoke = rowsNamed(results, 'build/smoke')[0];
+  assert.strictEqual(smoke.status, 'fail');
+  assert.match(smoke.detail, /commands\.smoke/, 'the detail must say why there was nothing to assert against');
+});
+
+atest('runTier1 REFUSES a workdir run with no repoRoot rather than scanning the wrong place', async () => {
+  const d = tier1Repo({ 'app/package.json': '{"name":"app"}' });
+  await assert.rejects(
+    () => runTier1({
+      cwd: path.join(d, 'app'), env: process.env, files: [], filesAll: [],
+      repoPath: d, baseSha: 'HEAD', headSha: 'HEAD',
+      config: { commands: { ...NO_CMDS }, timeouts: {}, smoke: {}, secrets: {}, workdir: 'app' },
+    }),
+    /repoRoot/,
+    'a forgotten repoRoot under a workdir must be an error, not a silently blind scan',
+  );
+});
+
+// The guard above cannot fire for workdir "." — which is the common case — so it does NOT
+// prove index.js still threads repoRoot. Deleting that one argument left the whole suite
+// green when this was mutated. Pin the wiring at the source, the same way the version
+// single-source check below does.
+test('index.js threads repoRoot into runTier1 (the arg the unit tests cannot see)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'engine', 'index.js'), 'utf8');
+  const call = src.slice(src.indexOf('await runTier1({'), src.indexOf('await runTier1({') + 400);
+  assert.ok(/\brepoRoot:\s*sandbox\.dir\b/.test(call),
+    'index.js must pass repoRoot: sandbox.dir — without it the secrets scan reads the workdir');
 });
 
 console.log('housekeeping — version single-source + log DRY (R5)');
