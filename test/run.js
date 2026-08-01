@@ -658,15 +658,34 @@ console.log('isolation: fail-closed (PR E)');
 // the repo owner reads their own config and believes they are jailed. Measured before the fix:
 // "Docker", "DOCKER", "dokcer", " docker", "docker ", true, 1, null and "podman" ALL host-exec.
 // A capital D is the likeliest human typo and it silently removed the entire sandbox.
+// The whole config→command path sits inside assert.throws on purpose: the property is "there is
+// no route from this config to an unjailed command", so it must not matter which of the two
+// choke points does the rejecting.
 test('an unrecognized isolation.mode is a hard error, never a silent host exec', () => {
   for (const mode of ['Docker', 'DOCKER', 'dokcer', ' docker', 'docker ', 'podman', true, 1]) {
-    const iso = resolveIsolation({ isolation: { mode } });
     assert.throws(
-      () => wrapCommand('npm ci', { isolation: iso, cwd: '/w' }),
+      () => wrapCommand('npm ci', { isolation: resolveIsolation({ isolation: { mode } }), cwd: '/w' }),
       /isolation\.mode/,
       `mode ${JSON.stringify(mode)} must be rejected, not quietly run on the host`
     );
   }
+});
+
+// The wrong-case KEY case. `{"Mode":"docker"}` leaves the resolved mode at its "none" default, so
+// no value check can see it — the owner reads "docker" in their config and has no jail.
+test('a misspelled isolation key is a hard error, not a silently ignored one', () => {
+  for (const bad of [{ Mode: 'docker' }, { mode: 'docker', readOnly: false }, { Network: 'allow' }]) {
+    assert.throws(
+      () => resolveIsolation({ isolation: bad }),
+      /unknown isolation key/,
+      `${JSON.stringify(bad)} must be rejected`
+    );
+  }
+});
+
+test('an unrecognized isolation.network is a hard error', () => {
+  assert.throws(() => resolveIsolation({ isolation: { mode: 'docker', network: 'Deny' } }), /isolation\.network/);
+  assert.throws(() => resolveIsolation({ isolation: { mode: 'docker', network: true } }), /isolation\.network/);
 });
 
 // Throwing is the fail-CLOSED choice here and that is not obvious, so it is written down:
