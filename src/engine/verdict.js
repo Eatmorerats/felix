@@ -13,7 +13,7 @@
  * verdict happened. `reason` is prose for humans and will be reworded; `cause` is
  * the contract gating.js keys on, so the two must never be conflated.
  *
- * `cause` exists because INSUFFICIENT EVIDENCE is five different situations wearing
+ * `cause` exists because INSUFFICIENT EVIDENCE is six different situations wearing
  * one label, and they are not equally safe to let through a Required check. GitHub
  * counts the `neutral` conclusion as PASSING, so every one of them is a bypass lane
  * for a repo that gates on Felix. The axis that decides which may pass is

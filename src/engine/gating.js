@@ -75,6 +75,26 @@ function assertKnown(values, valid, key) {
 }
 
 function resolveGating(config = {}) {
+  // `gating` itself must be an object. Both wrong shapes below are the same quiet lie the
+  // rest of this function exists to remove, just at the outer level:
+  //   "gating": true   → reaches the `in` probes and dies with a raw TypeError naming a JS
+  //                      operator, which tells an adopter nothing about their config file.
+  //   "gating": false  → falsy, so every check below short-circuits and it resolves to the
+  //                      DEFAULT silently — the adopter believing they configured something.
+  // An array is not a gating block either. undefined and null both read as "not set" and take
+  // the default, which is what an absent key already does — null needs no clause of its own
+  // because `typeof null === 'object'`, so it falls through here and the `|| {}` below turns
+  // it into the empty override. (An explicit `!== null` was tried and removed: it could not
+  // change the outcome of a single input, and a guard clause that never fires reads as
+  // protection that isn't there. The behaviour is pinned by a test, not by this line.)
+  if (config.gating !== undefined
+      && (typeof config.gating !== 'object' || Array.isArray(config.gating))) {
+    throw new Error(
+      'felix.config.json gating must be an object, got ' +
+      `${Array.isArray(config.gating) ? 'array' : typeof config.gating}. ` +
+      'Example: {"enabled": true, "blockOn": ["NOT VERIFIED"]}.'
+    );
+  }
   const g = { ...DEFAULT_GATING, ...(config.gating || {}) };
   // Absence takes the default; present-but-wrong-type is a config error, not a silent
   // downgrade — an adopter who wrote `"blockOn": "NOT VERIFIED"` (a string) meant to

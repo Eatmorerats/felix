@@ -110,12 +110,29 @@ for (const lane of LANES) {
   if (b.cause !== lane.id) {
     problems.push(`${lane.id}: probe drove the wrong path — compose() returned cause "${b.cause}"`);
   }
+  // The cause alone does not pin the verdict. Every lane here must be an INSUFFICIENT
+  // EVIDENCE, because that is the only verdict `insufficientExempt` is consulted for — a
+  // refactor that returned one of these causes under a different verdict would leave the
+  // probe reporting success about a lane it was no longer measuring.
+  if (b.verdict !== VERDICTS.INSUFFICIENT) {
+    problems.push(`${lane.id}: expected verdict INSUFFICIENT EVIDENCE, got "${b.verdict}"`);
+  }
+  // And the premise this whole design rests on: GitHub counts `neutral` as PASSING, so
+  // under the legacy config every one of these lanes is green on a Required check. If this
+  // ever stops being neutral, the "bypass" being closed was not the bypass we documented.
+  if (b.conclusion !== 'neutral') {
+    problems.push(`${lane.id}: BEFORE conclusion must be neutral (the passing state this closes), got "${b.conclusion}"`);
+  }
   console.log(`  ${mark(b)} -> ${mark(a)}   ${lane.label}`);
   console.log(`                      cause=${b.cause}  conclusion ${b.conclusion} -> ${a.conclusion}`);
 
   if (lane.mustCloseWhenGated && a.blocks !== true) {
     problems.push(`${lane.id}: MUST close when gated, but still bypasses (conclusion ${a.conclusion})`);
   }
+  // NOT asserted here: that a blocking lane reports `failure` to GitHub. drive() derives the
+  // conclusion as `blocks ? 'failure' : ...`, so with a.blocks already checked above, such an
+  // assertion could never fail — it would read as coverage while testing this file's own line.
+  // The engine's real blocks→failure mapping is pinned in test/run.js against index.js.
   if (!lane.mustCloseWhenGated && a.blocks !== false) {
     problems.push(`${lane.id}: must STAY open (nothing in a PR can cause or fix it), but it blocks`);
   }
@@ -141,7 +158,8 @@ if (problems.length) {
 }
 
 console.log(
-  '\nRESULT: all five attacker-reachable lanes close when the repo gates on insufficiency;\n' +
+  '\nRESULT: the four attacker-reachable lanes and the residual close when the repo gates on\n' +
+  '        insufficiency (the residual is not reachable — it closes by failing closed);\n' +
   '        judge_unconfigured stays open (no contributor can fix a missing adopter key);\n' +
   '        the control blocks under both, so the probe can tell the two directions apart.\n'
 );

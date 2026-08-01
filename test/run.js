@@ -1349,7 +1349,11 @@ test('judge_unconfigured is earned by configured===false ONLY — every other nu
   assert.strictEqual(gateDecision({ verdict: ok.verdict, cause: ok.cause, gating: g }).blocks, false);
 });
 
-test('the attribution table: four attacker-reachable causes block, only judge_unconfigured passes', () => {
+// The name counts what the table below asserts: FOUR attacker-reachable causes plus the
+// residual all block (five true rows), and judge_unconfigured is the single exemption. The
+// residual is not attacker-reachable — it blocks because an unattributed state must fail
+// closed — so folding it into the "reachable" count would misdescribe the axis.
+test('the attribution table: four attacker-reachable causes and the residual block, only judge_unconfigured passes', () => {
   const g = gatedInsufficient();
   const expected = {
     [CAUSES.INSTALL_FAILED]: true,
@@ -1470,6 +1474,26 @@ test('a typo in insufficientExempt throws', () => {
 test('a present-but-wrong-type blockOn throws rather than reverting to the default', () => {
   assert.throws(() => resolveGating({ gating: { enabled: true, blockOn: 'NOT VERIFIED' } }), /must be an array/);
   assert.throws(() => resolveGating({ gating: { enabled: true, insufficientExempt: 'fork' } }), /must be an array/);
+});
+
+// The outer shape, for the same reason as the inner ones. `"gating": true` used to die with
+// `Cannot use 'in' operator to search for 'blockOn' in true` — a JS operator error for what is
+// a config mistake — and `"gating": false` was accepted silently, resolving to the default
+// while the adopter believed they had written a policy.
+test('a non-object gating block throws instead of a TypeError or a silent default', () => {
+  for (const bad of [true, 'yes', 42, ['NOT VERIFIED']]) {
+    assert.throws(
+      () => resolveGating({ gating: bad }),
+      /gating must be an object/,
+      `gating: ${JSON.stringify(bad)} must be named as a config error`,
+    );
+  }
+  // false is the one that used to pass silently — it must not resolve to the default.
+  assert.throws(() => resolveGating({ gating: false }), /gating must be an object, got boolean/);
+});
+
+test('an explicitly null gating block reads as "not set" and takes the defaults', () => {
+  assert.deepStrictEqual(resolveGating({ gating: null }), resolveGating({}));
 });
 
 test('an absent gating block still resolves to the shipped defaults', () => {

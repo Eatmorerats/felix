@@ -207,7 +207,7 @@ the contributor fix it":
 | `fork` | ✅ yes — *selectable*: open the PR from a fork and the judge is skipped | 🔒 blocks |
 | `judge_error` | ✅ yes — criteria come from the PR body and can be sized to break the judge | 🔒 blocks |
 | `judge_unconfigured` | ❌ no — it is your own missing key | 🔓 exempt |
-| `judge_unavailable_unknown` | — residual, should never fire | 🔒 blocks |
+| `judge_unavailable_unknown` | ⚠️ residual — the judge returned nothing and recorded no reason | 🔒 blocks |
 
 `fork` blocks even though an outside contributor cannot un-fork their PR. That is
 deliberate: it is the cheapest bypass in the whole system, so leaving it open would make
@@ -219,6 +219,11 @@ can add `"fork"` to `insufficientExempt` — one reviewable line, in the base co
 added by a future Felix version blocks by default instead of silently passing. Unrecognized
 values in either array are a **hard config error** — previously a typo like
 `"INSUFFICENT EVIDENCE"` matched nothing and silently left the repo with no gate at all.
+
+`judge_unavailable_unknown` is that principle applied inside the engine: it is a live branch,
+not dead code, reached whenever the judge yields no result and none of the named reasons
+applies. It blocks, so a state nobody anticipated costs a red check and a bug report rather
+than a quiet green.
 
 ### Driving the app (opt-in)
 
