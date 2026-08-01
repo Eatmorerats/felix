@@ -340,16 +340,51 @@ judges in one pass while the OpenAI seat chunks the same diff).
 
 ## Safety
 
-Felix runs untrusted PR scripts. Phase 1 mitigations: hand-run on trusted repos,
-no secrets injected into the sandbox, hard per-command timeouts with process-group
-kill. Stronger isolation (container/VM, egress limits) is a later phase.
+Felix runs untrusted PR scripts. Baseline mitigations: no secrets injected into the sandbox,
+hard per-command timeouts with process-group kill, and the policy half of `felix.config.json`
+read from the base ref so a PR cannot choose the rules it is judged by.
+
+### `isolation.mode: "docker"`
+
+Opt-in container jail for every Tier 1 command: no network except install, memory/CPU/pid caps,
+a non-root user, `--cap-drop ALL`, and a read-only root with only the mounted worktree and `/tmp`
+writable.
+
+**It is now fail-closed, and that is adopter-visible.** Three configurations that used to run
+anyway now stop the build with an error naming the exact line to change:
+
+| Config | Was | Now |
+| --- | --- | --- |
+| `mode` not exactly `"none"` or `"docker"` — e.g. `"Docker"` | ran on the **host**, no warning | hard error |
+| a misspelled key — e.g. `{"Mode": "docker"}` | ignored, so `mode` stayed `"none"` | hard error |
+| `mode: "docker"` **and** `drive.startCommand` set | drive booted the app on the **host**, outside the jail | hard error — pick one |
+| `mode: "docker"` where the runner has no docker | install "failed" → INSUFFICIENT EVIDENCE, which **passes** a Required check | hard error, before any PR code runs |
+
+If a repo is running one of these today it is not jailed, whatever its config says. The fix is
+one line; the error message tells you which.
+
+Docker mode also sets `HOME`, `XDG_CACHE_HOME`, `npm_config_cache`, `GOPATH` and `CARGO_HOME`
+into the `/tmp` tmpfs. Without that, the read-only root left `HOME=/` and `npm ci` died on `mkdir '/.npm'` — so docker
+mode had never once completed a Node install. That is measured, not assumed: `npm run test:jail`
+runs a real install in a real container *and* runs the pre-fix shape as a control that must fail. Two consequences
+worth knowing: a test that reads `HOME` sees `/tmp`, and the package caches now count against
+`isolation.tmpfsSize` (default raised `512m` → `1g`; raise it further for a heavy install).
+
+**Python note:** under `--read-only`, `pip install` into the image's global `site-packages` fails.
+Use a venv inside the worktree — `python -m venv .venv && .venv/bin/pip install -r requirements.txt`.
+
+Known gap: a jailed `drive` does not exist. It needs a container lifecycle with orphan cleanup,
+and publishing a port would force `--network bridge` — handing untrusted code the runtime egress
+the net-deny test steps withhold. Felix's own browser would still render attacker-served pages on
+the host. Refusing the combination is honest; a half-jail would not be.
 
 ## Tests
 
 ```bash
-npm test        # 191 offline unit tests, no network
+npm test        # 273 offline unit tests, no network
 npm run test:crap   # end-to-end: real c8 + escomplex prove the CRAP criteria
 npm run test:live   # end-to-end: drives a real browser against a real app (needs Playwright)
+npm run test:jail   # end-to-end: a real npm install inside a real container (needs docker)
 ```
 
 `npm test` covers the pure/deterministic surface (config detection, spec parsing, the verdict

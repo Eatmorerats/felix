@@ -34,8 +34,8 @@ const {
 const picomatchLib = require('picomatch');
 const { parseTarget } = require('../src/engine/github');
 const { render } = require('../src/engine/comment');
-const { triageFiles, triggerGate, NEVER_SKIP, baseConfigFetcher } = require('../src/engine');
-const { resolveIsolation, wrapCommand } = require('../src/engine/isolation');
+const { triageFiles, triggerGate, NEVER_SKIP, baseConfigFetcher, run: felixRun } = require('../src/engine');
+const { resolveIsolation, wrapCommand, assertJailCoherent, preflightDocker } = require('../src/engine/isolation');
 const { renderError } = require('../src/engine/comment');
 const { computeMetrics, OUTCOMES } = require('../src/engine/calibration');
 const { resolveGating, gateDecision } = require('../src/engine/gating');
@@ -645,6 +645,205 @@ test('rejects flag-injection via pidsLimit / tmpfsSize', () => {
   assert.throws(() => wrapCommand('npm test', { isolation: bad1, cwd: '/w' }), /pidsLimit/);
   const bad2 = resolveIsolation({ isolation: { mode: 'docker', tmpfsSize: '512m --network=host' } });
   assert.throws(() => wrapCommand('npm test', { isolation: bad2, cwd: '/w' }), /tmpfsSize/);
+});
+
+// ── PR E: the jail is either on or it is an error — never silently off ───────
+//
+// Every test below was written RED, against the shipped behaviour, and each one
+// names the concrete thing that goes wrong when it fails.
+console.log('isolation: fail-closed (PR E)');
+
+// F4. wrapCommand's gate was `iso.mode !== 'docker'` -> return the bare command. Any value
+// that is not that exact string therefore meant "run it on the host", with no warning, while
+// the repo owner reads their own config and believes they are jailed. Measured before the fix:
+// "Docker", "DOCKER", "dokcer", " docker", "docker ", true, 1, null and "podman" ALL host-exec.
+// A capital D is the likeliest human typo and it silently removed the entire sandbox.
+// The whole config→command path sits inside assert.throws on purpose: the property is "there is
+// no route from this config to an unjailed command", so it must not matter which of the two
+// choke points does the rejecting.
+test('an unrecognized isolation.mode is a hard error, never a silent host exec', () => {
+  for (const mode of ['Docker', 'DOCKER', 'dokcer', ' docker', 'docker ', 'podman', true, 1]) {
+    assert.throws(
+      () => wrapCommand('npm ci', { isolation: resolveIsolation({ isolation: { mode } }), cwd: '/w' }),
+      /isolation\.mode/,
+      `mode ${JSON.stringify(mode)} must be rejected, not quietly run on the host`
+    );
+  }
+});
+
+// The wrong-case KEY case. `{"Mode":"docker"}` leaves the resolved mode at its "none" default, so
+// no value check can see it — the owner reads "docker" in their config and has no jail.
+test('a misspelled isolation key is a hard error, not a silently ignored one', () => {
+  for (const bad of [{ Mode: 'docker' }, { mode: 'docker', readOnly: false }, { Network: 'allow' }]) {
+    assert.throws(
+      () => resolveIsolation({ isolation: bad }),
+      /unknown isolation key/,
+      `${JSON.stringify(bad)} must be rejected`
+    );
+  }
+});
+
+test('an unrecognized isolation.network is a hard error', () => {
+  assert.throws(() => resolveIsolation({ isolation: { mode: 'docker', network: 'Deny' } }), /isolation\.network/);
+  assert.throws(() => resolveIsolation({ isolation: { mode: 'docker', network: true } }), /isolation\.network/);
+});
+
+// Throwing is the fail-CLOSED choice here and that is not obvious, so it is written down:
+// a throw propagates out of runTier1, out of run(), and bin/felix.js exits 3 — the CI job
+// fails and no check run is ever created, so a Required check cannot go green. Returning
+// INSUFFICIENT EVIDENCE instead would map to `neutral`, which GitHub counts as PASSING.
+test('the two supported modes still work and are the only ones', () => {
+  assert.strictEqual(wrapCommand('npm ci', { isolation: resolveIsolation({}), cwd: '/w' }), 'npm ci');
+  const docker = resolveIsolation({ isolation: { mode: 'docker' } });
+  assert.match(wrapCommand('npm ci', { isolation: docker, cwd: '/w' }), /^docker run --rm/);
+});
+
+// F14. `--read-only` + `-u <uid>:<gid>` for a uid with no /etc/passwd entry leaves container
+// HOME at `/`, which is on the read-only layer. npm writes its cache and _logs under $HOME,
+// so `npm ci` — the default install command — dies on `mkdir '/.npm'`. Docker mode had therefore
+// never once completed an install for a Node repo; confirmed live by the CI probe's control run,
+// which fails in 884ms. The errno is ENOENT, not the EROFS you would predict — the read-only
+// layer refuses the mkdir at `/` before any write is attempted. Same class for pip, go and cargo,
+// which is why the fix is a writable HOME rather than an npm-specific flag.
+test('docker mode gives the container a writable HOME', () => {
+  const iso = resolveIsolation({ isolation: { mode: 'docker' } });
+  const cmd = wrapCommand('npm ci', { isolation: iso, cwd: '/w', network: 'allow' });
+  const home = cmd.match(/-e HOME=(\S+)/);
+  assert.ok(home, 'docker run must set an explicit HOME');
+  const target = home[1].replace(/'/g, '');
+  assert.ok(
+    /^(\/tmp|\/work)/.test(target),
+    `HOME=${target} must point at a writable mount (the /tmp tmpfs or the /work bind), not the read-only root`
+  );
+});
+
+// The per-language caches live outside HOME for some toolchains, so a writable HOME alone is
+// not enough — each must be pointed somewhere writable or the same failure returns wearing a
+// different name.
+test('docker mode redirects the per-language package caches somewhere writable', () => {
+  const iso = resolveIsolation({ isolation: { mode: 'docker' } });
+  const cmd = wrapCommand('pip install -r requirements.txt', { isolation: iso, cwd: '/w', network: 'allow' });
+  for (const v of ['XDG_CACHE_HOME', 'npm_config_cache']) {
+    assert.match(cmd, new RegExp(`-e ${v}=`), `${v} must be pinned to a writable path`);
+  }
+});
+
+// F13. drive.js:351 spawns plan.startCommand with plain child_process.spawn and never calls
+// wrapCommand, so with mode:"docker" the PR's own app boots ON THE HOST, outside every cap.
+// Reproduced before the fix by a probe whose start command wrote a marker to a path OUTSIDE the
+// sandbox cwd — impossible from inside a --read-only container that mounts only /work — and the
+// marker appeared, carrying Felix's own HOME.
+//
+// The fix is refusal, not a jailed drive. Jailing the app would need a container lifecycle with
+// orphan cleanup, and port publishing forces --network bridge (handing untrusted code runtime
+// egress the net-deny test steps deliberately withhold). It would still leave Felix's chromium
+// running --no-sandbox ON THE HOST against attacker-served pages, so a half-jail here would
+// claim containment it does not have. Refusing says the true thing.
+test('docker isolation plus a drive start command is a hard error, not a host escape', () => {
+  const iso = resolveIsolation({ isolation: { mode: 'docker' } });
+  assert.throws(() => assertJailCoherent({ isolation: iso, hasDrivePlan: true }), /drive/);
+});
+test('drive without docker, and docker without drive, both stay allowed', () => {
+  const none = resolveIsolation({});
+  const docker = resolveIsolation({ isolation: { mode: 'docker' } });
+  assert.doesNotThrow(() => assertJailCoherent({ isolation: none, hasDrivePlan: true }));
+  assert.doesNotThrow(() => assertJailCoherent({ isolation: docker, hasDrivePlan: false }));
+});
+
+// F4 (the other half). With docker missing the wrapped command exits 127, the hard `install`
+// check "fails", and tier1 short-circuits to INSUFFICIENT EVIDENCE -> `neutral` — which GitHub
+// counts as PASSING a Required check. So a runner that quietly loses docker turns the security
+// upgrade itself into the merge bypass, while the comment blames the PR. The preflight runs
+// ZERO PR code, so its failure is provably the runner's fault by construction rather than by
+// parsing exit codes out of untrusted output.
+atest('docker mode refuses to start when docker is unavailable', async () => {
+  const iso = resolveIsolation({ isolation: { mode: 'docker' } });
+  const missing = async () => ({ code: 127, combined: 'docker: command not found', timedOut: false });
+  await assert.rejects(() => preflightDocker({ isolation: iso, run: missing }), /docker/);
+  const daemonDown = async () => ({ code: 1, combined: 'Cannot connect to the Docker daemon', timedOut: false });
+  await assert.rejects(() => preflightDocker({ isolation: iso, run: daemonDown }), /docker/);
+});
+atest('the preflight never runs in mode none, and passes when docker answers', async () => {
+  let calls = 0;
+  const spy = async () => { calls += 1; return { code: 0, combined: 'Docker version 27.0.0', timedOut: false }; };
+  await preflightDocker({ isolation: resolveIsolation({}), run: spy });
+  assert.strictEqual(calls, 0, 'mode none must not shell out to docker at all');
+  await preflightDocker({ isolation: resolveIsolation({ isolation: { mode: 'docker' } }), run: spy });
+  assert.strictEqual(calls, 1);
+});
+
+// These two exist because the unit tests above do NOT prove the guards are reachable. Measured:
+// commenting out both calls in index.js left 271 passed / 0 failed — the whole fix would have
+// shipped as dead code. So this drives the real run() and asserts it REJECTS, which is also the
+// property that matters at the gate: a rejection never reaches finalize(), so no check run is
+// created and a Required check cannot go green.
+function stubGitHubFor(baseConfig) {
+  const prior = globalThis.fetch;
+  const pr = {
+    number: 1, title: 'add a thing', body: 'closes #2', draft: false,
+    head: { sha: 'headsha', repo: { fork: false, full_name: 'o/r' } },
+    base: { sha: 'basesha', ref: 'main', repo: { full_name: 'o/r' } },
+    labels: [],
+  };
+  const reply = (body, type) => ({
+    ok: true, status: 200,
+    headers: { get: () => (type === 'json' ? 'application/json' : 'text/plain') },
+    json: async () => body,
+    text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
+  });
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (/\/contents\/felix\.config\.json/.test(u)) return reply(JSON.stringify(baseConfig), 'text');
+    if (/\/contents\?ref=/.test(u)) return reply([{ name: 'felix.config.json', type: 'file' }], 'json');
+    if (/\/files/.test(u)) return reply([{ filename: 'src/a.js', status: 'modified', additions: 3, deletions: 0 }], 'json');
+    if (/\/pulls\/1$/.test(u)) return reply(pr, 'json');
+    return reply({}, 'json');
+  };
+  return () => { globalThis.fetch = prior; };
+}
+
+// repoPath is a temp dir that is deliberately NOT a git repo, and that is what makes these tests
+// prove ORDERING rather than just rejection. The guards run at step 2b, before createSandbox; if
+// one were moved or removed, the run would get as far as `git worktree add` and reject with a git
+// error instead — a different message, so the assertion below fails. That ordering is the point:
+// throwing before the sandbox exists means no worktree of attacker content is ever created and
+// the base repo's post-checkout hook never fires.
+// A package.json so auto-detection can resolve the MECHANICS half (commands still come from
+// head); no `git init`, so createSandbox would fail loudly if it were ever reached.
+function notAGitRepo() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'felix-no-git-'));
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+    name: 'fixture', version: '1.0.0', scripts: { test: 'true' },
+  }));
+  return dir;
+}
+
+atest('run() refuses BEFORE the sandbox when the base config names an unknown isolation.mode', async () => {
+  const restore = stubGitHubFor({ isolation: { mode: 'Docker' }, commands: { test: 'true' } });
+  const repoPath = notAGitRepo();
+  try {
+    await assert.rejects(
+      () => felixRun({ target: 'o/r#1', repoPath, dryRun: true, post: false, env: { GITHUB_TOKEN: 't' } }),
+      /isolation\.mode/,
+      'a bad mode must abort the run at config load, not proceed with the jail silently off'
+    );
+  } finally { restore(); fs.rmSync(repoPath, { recursive: true, force: true }); }
+});
+
+atest('run() refuses BEFORE the sandbox when docker isolation is combined with drive', async () => {
+  const restore = stubGitHubFor({
+    isolation: { mode: 'docker' },
+    drive: { enabled: true, startCommand: 'npm start', routes: ['/'] },
+    commands: { test: 'true' },
+  });
+  const repoPath = notAGitRepo();
+  try {
+    await assert.rejects(
+      () => felixRun({ target: 'o/r#1', repoPath, dryRun: true, post: false, env: { GITHUB_TOKEN: 't' } }),
+      /drive/,
+      'docker + drive must abort the run, not boot the app on the host'
+    );
+  } finally { restore(); fs.rmSync(repoPath, { recursive: true, force: true }); }
 });
 
 console.log('trigger gate + self-error (Phase 2)');
