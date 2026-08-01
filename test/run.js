@@ -647,6 +647,66 @@ test('rejects flag-injection via pidsLimit / tmpfsSize', () => {
   assert.throws(() => wrapCommand('npm test', { isolation: bad2, cwd: '/w' }), /tmpfsSize/);
 });
 
+// ── PR E: the jail is either on or it is an error — never silently off ───────
+//
+// Every test below was written RED, against the shipped behaviour, and each one
+// names the concrete thing that goes wrong when it fails.
+console.log('isolation: fail-closed (PR E)');
+
+// F4. wrapCommand's gate was `iso.mode !== 'docker'` -> return the bare command. Any value
+// that is not that exact string therefore meant "run it on the host", with no warning, while
+// the repo owner reads their own config and believes they are jailed. Measured before the fix:
+// "Docker", "DOCKER", "dokcer", " docker", "docker ", true, 1, null and "podman" ALL host-exec.
+// A capital D is the likeliest human typo and it silently removed the entire sandbox.
+test('an unrecognized isolation.mode is a hard error, never a silent host exec', () => {
+  for (const mode of ['Docker', 'DOCKER', 'dokcer', ' docker', 'docker ', 'podman', true, 1]) {
+    const iso = resolveIsolation({ isolation: { mode } });
+    assert.throws(
+      () => wrapCommand('npm ci', { isolation: iso, cwd: '/w' }),
+      /isolation\.mode/,
+      `mode ${JSON.stringify(mode)} must be rejected, not quietly run on the host`
+    );
+  }
+});
+
+// Throwing is the fail-CLOSED choice here and that is not obvious, so it is written down:
+// a throw propagates out of runTier1, out of run(), and bin/felix.js exits 3 — the CI job
+// fails and no check run is ever created, so a Required check cannot go green. Returning
+// INSUFFICIENT EVIDENCE instead would map to `neutral`, which GitHub counts as PASSING.
+test('the two supported modes still work and are the only ones', () => {
+  assert.strictEqual(wrapCommand('npm ci', { isolation: resolveIsolation({}), cwd: '/w' }), 'npm ci');
+  const docker = resolveIsolation({ isolation: { mode: 'docker' } });
+  assert.match(wrapCommand('npm ci', { isolation: docker, cwd: '/w' }), /^docker run --rm/);
+});
+
+// F14. `--read-only` + `-u <uid>:<gid>` for a uid with no /etc/passwd entry leaves container
+// HOME at `/`, which is on the read-only layer. npm writes its cache and _logs under $HOME,
+// so `npm ci` — the default install command — dies with EROFS. Docker mode has therefore
+// probably never completed an install for a Node repo. Same class for pip, go and cargo,
+// which is why the fix is a writable HOME rather than an npm-specific flag.
+test('docker mode gives the container a writable HOME', () => {
+  const iso = resolveIsolation({ isolation: { mode: 'docker' } });
+  const cmd = wrapCommand('npm ci', { isolation: iso, cwd: '/w', network: 'allow' });
+  const home = cmd.match(/-e HOME=(\S+)/);
+  assert.ok(home, 'docker run must set an explicit HOME');
+  const target = home[1].replace(/'/g, '');
+  assert.ok(
+    /^(\/tmp|\/work)/.test(target),
+    `HOME=${target} must point at a writable mount (the /tmp tmpfs or the /work bind), not the read-only root`
+  );
+});
+
+// The per-language caches live outside HOME for some toolchains, so a writable HOME alone is
+// not enough — each must be pointed somewhere writable or the same EROFS returns wearing a
+// different name.
+test('docker mode redirects the per-language package caches somewhere writable', () => {
+  const iso = resolveIsolation({ isolation: { mode: 'docker' } });
+  const cmd = wrapCommand('pip install -r requirements.txt', { isolation: iso, cwd: '/w', network: 'allow' });
+  for (const v of ['XDG_CACHE_HOME', 'npm_config_cache']) {
+    assert.match(cmd, new RegExp(`-e ${v}=`), `${v} must be pinned to a writable path`);
+  }
+});
+
 console.log('trigger gate + self-error (Phase 2)');
 test('triggerGate flags a draft PR', () => {
   const g = triggerGate({ draft: true, head: { repo: { full_name: 'o/r', fork: false } }, base: { repo: { full_name: 'o/r' } } });
