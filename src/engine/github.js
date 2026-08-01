@@ -79,6 +79,27 @@ function createGitHub(token, { apiBase = API_BASE } = {}) {
       return gh(`/repos/${owner}/${repo}/issues/${number}`);
     },
 
+    /**
+     * Entries at the repo ROOT for a ref. Null when the ref itself does not resolve.
+     *
+     * This exists to disambiguate a 404. The contents API answers 404 both for "that file is not
+     * there" and for "that ref is not there", and conflating them is dangerous in one direction:
+     * an unresolvable ref would read as "no config at base" → built-in defaults → a repo that
+     * configured gating silently loses it. Listing the root separates the two — a 404 here means
+     * the ref is bad, while a 200 without the file means the file is genuinely absent.
+     */
+    listRootContents(owner, repo, ref) {
+      return gh(`/repos/${owner}/${repo}/contents?ref=${encodeURIComponent(ref)}`);
+    },
+
+    /** Raw bytes of one file at a ref (no base64 envelope). Null when the path is absent. */
+    getRawFile(owner, repo, filePath, ref) {
+      const encoded = String(filePath).split('/').map(encodeURIComponent).join('/');
+      return gh(`/repos/${owner}/${repo}/contents/${encoded}?ref=${encodeURIComponent(ref)}`, {
+        accept: 'application/vnd.github.raw',
+      });
+    },
+
     /** Recent commits on the default branch (or a given ref) for outcome scans. */
     listCommits(owner, repo, { perPage = 100, sha } = {}) {
       return gh(`/repos/${owner}/${repo}/commits?per_page=${Math.min(perPage, 100)}${sha ? `&sha=${encodeURIComponent(sha)}` : ''}`);

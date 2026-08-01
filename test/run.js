@@ -13,7 +13,10 @@ const path = require('path');
 const Module = require('module');
 const { createRequire } = Module;
 
-const { detect, merge, validate } = require('../src/engine/config');
+const {
+  detect, merge, validate, loadConfig, resolveWorkdir,
+  POLICY_KEYS, MECHANICS_KEYS, DEFAULT_SKIP_GLOBS, DEFAULT_SECRETS,
+} = require('../src/engine/config');
 const { extractCriteria, buildSpec, linkedIssueNumbers } = require('../src/engine/spec');
 const { compose, VERDICTS, conclusionFor } = require('../src/engine/verdict');const { assertCrossFamily, buildPrompt, createJudge, mergeChunkRulings, chunkVerdict, PROVIDERS } = require('../src/engine/judge');
 const {
@@ -31,7 +34,7 @@ const {
 const picomatchLib = require('picomatch');
 const { parseTarget } = require('../src/engine/github');
 const { render } = require('../src/engine/comment');
-const { triageFiles, triggerGate } = require('../src/engine');
+const { triageFiles, triggerGate, NEVER_SKIP, baseConfigFetcher } = require('../src/engine');
 const { resolveIsolation, wrapCommand } = require('../src/engine/isolation');
 const { renderError } = require('../src/engine/comment');
 const { computeMetrics, OUTCOMES } = require('../src/engine/calibration');
@@ -2180,6 +2183,255 @@ test('arming is idempotent and disarm fully restores resolution', () => {
   const sentinel = path.join(dir, 'pwned.txt');
   const req = plantModule(dir, 'felix-plant-restored', sentinel);
   assert.strictEqual(req('felix-plant-restored').pwned, true, 'disarm restores normal resolution');
+});
+
+console.log('config trust boundary — a PR cannot change the policy it is judged by (F2, F3, F12)');
+
+// The base config is fetched over the GitHub contents API at pr.base.sha, so these tests inject
+// the fetcher rather than building git repos. Contract: resolve {present:true,raw} when the file
+// exists at base, {present:false} when the ref resolved but the file is genuinely absent, and
+// THROW when the ref itself could not be resolved. That third case must never reach head.
+const baseAt = (obj) => async () => ({ present: true, raw: JSON.stringify(obj) });
+const baseRaw = (raw) => async () => ({ present: true, raw });
+const baseAbsent = () => async () => ({ present: false });
+const baseUnreachable = (msg = 'base ref unresolvable') => async () => { throw new Error(msg); };
+
+/** A head checkout: a repo dir with a package.json and (optionally) a felix.config.json. */
+function headRepo(userConfig, pkg = { scripts: { test: 'node t.js' } }) {
+  const d = tmpdir();
+  fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify(pkg));
+  if (userConfig) fs.writeFileSync(path.join(d, 'felix.config.json'), JSON.stringify(userConfig));
+  return d;
+}
+
+// ── F3: the one-line Required-check bypass ───────────────────────────────────
+atest('a PR widening skipGlobs to ["**"] does not skip its own verification', async () => {
+  const repoPath = headRepo({ skipGlobs: ['**'] });
+  const { config } = await loadConfig({ repoPath, fetchBaseConfig: baseAbsent() });
+  assert.deepStrictEqual(config.skipGlobs, DEFAULT_SKIP_GLOBS,
+    'head skipGlobs must not reach the effective config');
+  const t = triageFiles([{ filename: 'src/a.js' }], config.skipGlobs);
+  assert.strictEqual(t.skipped, false, 'the PR must still be verified');
+});
+
+atest('base skipGlobs wins over head skipGlobs', async () => {
+  const repoPath = headRepo({ skipGlobs: ['**'] });
+  const { config } = await loadConfig({ repoPath, fetchBaseConfig: baseAt({ skipGlobs: ['vendor/**'] }) });
+  assert.deepStrictEqual(config.skipGlobs, ['vendor/**']);
+});
+
+// ── F2: gating, isolation, secrets, timeouts, workdir ────────────────────────
+atest('a PR cannot disable gating that the base ref enables', async () => {
+  const repoPath = headRepo({ gating: { enabled: false, blockOn: [] } });
+  const { config } = await loadConfig({
+    repoPath, fetchBaseConfig: baseAt({ gating: { enabled: true, blockOn: ['NOT VERIFIED'] } }),
+  });
+  const g = resolveGating(config);
+  assert.strictEqual(g.enabled, true);
+  assert.deepStrictEqual(g.blockOn, ['NOT VERIFIED']);
+  assert.strictEqual(gateDecision({ verdict: 'NOT VERIFIED', gating: g }).blocks, true);
+});
+
+atest('a PR cannot weaken the secrets gate, the timeouts, or the jail', async () => {
+  const repoPath = headRepo({
+    secrets: { sinRequiresKeyword: false, allowFiles: ['**'], externalScan: 'true' },
+    timeouts: { testMs: 1 },
+    isolation: { mode: 'none', image: 'attacker/evil' },
+  });
+  const { config } = await loadConfig({
+    repoPath,
+    fetchBaseConfig: baseAt({ isolation: { mode: 'docker' }, timeouts: { testMs: 600000 } }),
+  });
+  assert.deepStrictEqual(config.secrets.allowFiles, DEFAULT_SECRETS.allowFiles);
+  assert.strictEqual(config.secrets.externalScan, '');
+  assert.strictEqual(config.timeouts.testMs, 600000);
+  assert.strictEqual(config.isolation.mode, 'docker');
+  assert.notStrictEqual(config.isolation.image, 'attacker/evil');
+});
+
+// ── §5: omission is not override — the failure a field-by-field test misses ──
+atest('a hostile head config yields an effective config identical to the base-only one', async () => {
+  const pkg = { scripts: { test: 'npm run t' }, devDependencies: { vite: '^5', vitest: '^1' } };
+  const hostile = {
+    skipGlobs: ['**'], workdir: '../../..',
+    gating: { enabled: false }, isolation: { mode: 'none' },
+    secrets: { sinRequiresKeyword: false }, timeouts: { testMs: 1 },
+    smoke: { expect: 'anything', timeoutMs: 1 },
+    crap: { enabled: true, threshold: 0 }, deps: { enabled: true },
+    judge: { adversarial: false },
+    drive: { enabled: true, startCommand: 'sleep 1', url: 'http://169.254.169.254', port: 80, routes: ['/'] },
+  };
+  const hostileCfg = (await loadConfig({ repoPath: headRepo(hostile, pkg), fetchBaseConfig: baseAbsent() })).config;
+  const benignCfg = (await loadConfig({ repoPath: headRepo(null, pkg), fetchBaseConfig: baseAbsent() })).config;
+  assert.deepStrictEqual(hostileCfg, benignCfg,
+    'every policy block must come from base/defaults — an OMITTED base block must not let head win');
+});
+
+atest('detection cannot smuggle a drive block past the boundary', async () => {
+  // suggestDrive() pre-fills drive.startCommand from head's package.json. With no drive block at
+  // base, drive must not exist at all — otherwise head steers an unjailed fetch (SSRF).
+  const pkg = { scripts: { test: 'npm run t', preview: 'vite preview' }, devDependencies: { vite: '^5' } };
+  assert.ok(detect(headRepo(null, pkg)).drive, 'precondition: detection does suggest a drive block');
+  const { config } = await loadConfig({ repoPath: headRepo({ drive: { enabled: true } }, pkg), fetchBaseConfig: baseAbsent() });
+  assert.strictEqual(config.drive, undefined, 'no drive at base ⇒ no drive at all');
+});
+
+// ── Mechanics still come from head, or Felix could not verify new work ───────
+atest('mechanics (language, commands, test) still come from the PR head', async () => {
+  const repoPath = headRepo({ commands: { install: 'npm ci', test: 'npx vitest run' }, test: { filePattern: 'spec/**' } });
+  const { config } = await loadConfig({ repoPath, fetchBaseConfig: baseAt({ commands: { test: 'STALE' }, gating: { enabled: true } }) });
+  assert.strictEqual(config.commands.test, 'npx vitest run', 'a PR that changes its test command must be honoured');
+  assert.strictEqual(config.test.filePattern, 'spec/**');
+  assert.strictEqual(config.language, 'node');
+  assert.strictEqual(resolveGating(config).enabled, true, 'policy is still base-sourced alongside');
+});
+
+// ── The four base-read failure modes ─────────────────────────────────────────
+atest('no felix.config.json at base ⇒ built-in defaults, not an error', async () => {
+  const { config, policySource } = await loadConfig({ repoPath: headRepo(null), fetchBaseConfig: baseAbsent() });
+  assert.deepStrictEqual(config.skipGlobs, DEFAULT_SKIP_GLOBS);
+  assert.strictEqual(resolveGating(config).enabled, false);
+  assert.strictEqual(config.workdir, '.');
+  assert.match(policySource, /default/i);
+});
+
+atest('an unresolvable base ref is a hard error — it never falls back to head', async () => {
+  const repoPath = headRepo({ skipGlobs: ['**'], gating: { enabled: false } });
+  await assert.rejects(
+    () => loadConfig({ repoPath, fetchBaseConfig: baseUnreachable('boom') }),
+    /boom/,
+    'the failure must propagate, not be swallowed into head-sourced policy',
+  );
+});
+
+atest('loadConfig refuses outright when no fetchBaseConfig is supplied', async () => {
+  // Guards the seam itself: a future caller that forgets the fetcher must not silently get
+  // head-sourced policy back. There is no default, and no repoPath-only overload.
+  await assert.rejects(() => loadConfig({ repoPath: headRepo(null) }), /base ref/i);
+});
+
+// The refusal message + the trusted-only fallback chain live in the real fetcher, so test it.
+atest('baseConfigFetcher falls back sha → branch tip, and refuses when neither resolves', async () => {
+  const calls = [];
+  const fakeGh = (rootFor) => ({
+    listRootContents: async (o, r, ref) => { calls.push(ref); return rootFor[ref] || null; },
+    getRawFile: async () => '{"gating":{"enabled":true}}',
+  });
+
+  // sha 404s, branch tip resolves and has the file → policy still comes from trusted content.
+  const viaRef = await baseConfigFetcher(fakeGh({ main: [{ name: 'felix.config.json', type: 'file' }] }),
+    'o', 'r', { baseSha: 'deadsha', baseRef: 'main' })();
+  assert.deepStrictEqual(calls, ['deadsha', 'main']);
+  assert.strictEqual(viaRef.present, true);
+  assert.strictEqual(viaRef.ref, 'main');
+
+  // A ref that resolves but has no config → the soft "absent" path, not an error.
+  const absent = await baseConfigFetcher(fakeGh({ main: [{ name: 'README.md', type: 'file' }] }),
+    'o', 'r', { baseSha: 'main' })();
+  assert.deepStrictEqual(absent, { present: false, ref: 'main' });
+
+  // Neither resolves → refuse by name. This is the case that must never reach head.
+  await assert.rejects(
+    () => baseConfigFetcher(fakeGh({}), 'o', 'r', { baseSha: 'x', baseRef: 'y' })(),
+    /base ref[\s\S]*Refusing/,
+  );
+});
+
+atest('a malformed base config is a hard error, never a silent downgrade to defaults', async () => {
+  await assert.rejects(
+    () => loadConfig({ repoPath: headRepo(null), fetchBaseConfig: baseRaw('{ "gating": { enabled: true') }),
+    /base ref.*valid JSON|valid JSON.*base/i,
+  );
+});
+
+atest('a malformed HEAD config is a hard error, not a silent fall-through to auto-detect', async () => {
+  const d = tmpdir();
+  fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ scripts: { test: 'node t.js' } }));
+  fs.writeFileSync(path.join(d, 'felix.config.json'), '{ oops');
+  await assert.rejects(() => loadConfig({ repoPath: d, fetchBaseConfig: baseAbsent() }), /valid JSON/i);
+});
+
+// ── The key inventory: a new config field must be classified, not forgotten ──
+test('every config field the engine reads is in exactly one of POLICY_KEYS / MECHANICS_KEYS', () => {
+  const dir = path.join(__dirname, '..', 'src', 'engine');
+  const seen = new Set();
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { walk(p); continue; }
+      if (!e.name.endsWith('.js')) continue;
+      // Drop filename mentions first, or "felix.config.json" / "config.js" in prose read as
+      // fields named "json" / "js". No real config field is named for a file extension.
+      const src = fs.readFileSync(p, 'utf8').replace(/[\w.-]*config\.(js|json|example\.json)\b/gi, '');
+      for (const m of src.matchAll(/\bconfig\.([a-zA-Z_$][\w$]*)/g)) seen.add(m[1]);
+    }
+  };
+  walk(dir);
+  const classified = new Set([...POLICY_KEYS, ...MECHANICS_KEYS]);
+  const unclassified = [...seen].filter((k) => !classified.has(k));
+  assert.deepStrictEqual(unclassified, [],
+    `unclassified config field(s) — add each to POLICY_KEYS or MECHANICS_KEYS: ${unclassified.join(', ')}`);
+  const overlap = POLICY_KEYS.filter((k) => MECHANICS_KEYS.includes(k));
+  assert.deepStrictEqual(overlap, [], 'the two key sets must be disjoint, or spread order decides policy');
+});
+
+// ── F12: workdir cannot escape the sandbox ───────────────────────────────────
+console.log('workdir containment (F12)');
+test('resolveWorkdir accepts "." and a real subdirectory', () => {
+  const root = tmpdir();
+  fs.mkdirSync(path.join(root, 'app'));
+  assert.strictEqual(resolveWorkdir(root, '.'), fs.realpathSync(root));
+  assert.strictEqual(resolveWorkdir(root, 'app'), fs.realpathSync(path.join(root, 'app')));
+});
+
+test('resolveWorkdir refuses traversal, absolute paths, and a missing directory', () => {
+  const root = tmpdir();
+  assert.throws(() => resolveWorkdir(root, '../../..'), /escapes the sandbox/);
+  assert.throws(() => resolveWorkdir(root, 'app/../../..'), /escapes the sandbox/);
+  assert.throws(() => resolveWorkdir(root, path.resolve(os.tmpdir())), /must be relative/);
+  assert.throws(() => resolveWorkdir(root, 'nope'), /does not exist/);
+});
+
+test('resolveWorkdir refuses a sibling whose name merely shares the root prefix', () => {
+  // The classic prefix-test bug: "/foo" vs "/foobar". A string startsWith() check passes this.
+  const parent = tmpdir();
+  const root = path.join(parent, 'foo');
+  fs.mkdirSync(root); fs.mkdirSync(path.join(parent, 'foobar'));
+  assert.throws(() => resolveWorkdir(root, '../foobar'), /escapes the sandbox/);
+});
+
+test('resolveWorkdir refuses a symlink that points outside the sandbox', () => {
+  const root = tmpdir();
+  const outside = tmpdir();
+  let linked = false;
+  // Windows needs elevation/developer mode for symlinks; the assertion is real on CI (ubuntu).
+  try { fs.symlinkSync(outside, path.join(root, 'app'), 'junction'); linked = true; } catch (_) { /* skipped */ }
+  if (linked) assert.throws(() => resolveWorkdir(root, 'app'), /escapes the sandbox/);
+});
+
+// ── The control surface: skipGlobs must not be able to hide Felix's own inputs ──
+console.log('control-surface triage — skipGlobs cannot hide what decides the verdict');
+test('a PR touching only felix.config.json is NOT triaged away', () => {
+  const t = triageFiles([{ filename: 'felix.config.json' }], DEFAULT_SKIP_GLOBS);
+  assert.strictEqual(t.skipped, false, 'default **/*.json would otherwise skip it and merge it unverified');
+});
+
+test('a PR touching only package.json or a workflow is NOT triaged away', () => {
+  // package.json carries scripts.test — the body of commands.test for most Node repos. Skipping
+  // it lets `"test": "exit 0"` merge unverified, and every later PR passes Tier 1 from base.
+  assert.strictEqual(triageFiles([{ filename: 'package.json' }], DEFAULT_SKIP_GLOBS).skipped, false);
+  assert.strictEqual(triageFiles([{ filename: 'packages/api/package.json' }], DEFAULT_SKIP_GLOBS).skipped, false);
+  assert.strictEqual(triageFiles([{ filename: '.github/workflows/felix.yml' }], DEFAULT_SKIP_GLOBS).skipped, false);
+});
+
+test('an explicit skipGlobs cannot suppress the control surface either', () => {
+  assert.strictEqual(triageFiles([{ filename: 'felix.config.json' }], ['**']).skipped, false);
+  assert.ok(NEVER_SKIP.length > 0, 'NEVER_SKIP is the non-overridable list');
+});
+
+test('a genuinely non-behavioral PR is still skipped', () => {
+  const t = triageFiles([{ filename: 'README.md' }, { filename: 'docs/x.md' }], DEFAULT_SKIP_GLOBS);
+  assert.strictEqual(t.skipped, true, 'the triage short-circuit must survive — this is not a blanket disable');
 });
 
 // Run the deferred async tests (judge wire-contract) after the sync suite, then tally.

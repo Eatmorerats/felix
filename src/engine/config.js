@@ -15,6 +15,9 @@
 const fs = require('fs');
 const path = require('path');
 const { logger } = require('./util/logger');
+const { IMAGE_BY_LANGUAGE } = require('./isolation');
+
+const CONFIG_FILENAME = 'felix.config.json';
 
 const DEFAULT_SKIP_GLOBS = [
   '**/*.md', 'docs/**', '**/*.txt', '**/*.json',
@@ -301,6 +304,130 @@ function merge(detected, user) {
   return out;
 }
 
+/**
+ * ── The trust boundary ───────────────────────────────────────────────────────
+ *
+ * `felix.config.json` is written by whoever opens the pull request. This file already knew that
+ * about `drive.flows` ("SAFETY: this file is attacker-controlled") and fenced it; the fields that
+ * decide the VERDICT were never fenced. One line — `"skipGlobs": ["**"]` — made every changed file
+ * non-behavioral, short-circuiting the run to SKIPPED, which GitHub does not block a Required check
+ * on. No code execution, works from a fork. Same shape for `gating.enabled:false`, a widened
+ * `secrets.allowFiles`, or `isolation.mode:"none"`.
+ *
+ * So the config is split in two:
+ *
+ *   POLICY    — everything that shapes Felix's own judgment, enforcement or containment. Read from
+ *               the BASE ref (merged, reviewed content). The head never contributes to it.
+ *   MECHANICS — the three things that must describe the tree actually being run. Read from head,
+ *               deliberately: a PR that adds a runner, renames a script or switches tooling has to
+ *               be verified with ITS commands, not the base's stale ones.
+ *
+ * Base-sourcing `commands` would be theatre rather than a boundary. `commands.test` is almost never
+ * a literal runner — it is `npm run test` / `pytest`, whose BODY lives in head's package.json or
+ * conftest.py, which must come from head because running head's code is the entire product. An
+ * attacker reproduces the bypass one level down in a diff that looks *more* innocent, while honest
+ * PRs pay false blocks. What covers that class is the control-surface rule in index.js: a PR
+ * touching package.json or felix.config.json is verified, never triaged away.
+ *
+ * The two lists are DISJOINT, and a test enforces it — the effective config is a spread of one over
+ * the other, so a key in both would let spread order silently decide policy.
+ */
+const POLICY_KEYS = [
+  'skipGlobs', 'workdir', 'gating', 'isolation', 'secrets',
+  'timeouts', 'smoke', 'crap', 'deps', 'drive', 'judge',
+];
+const MECHANICS_KEYS = ['language', 'commands', 'test'];
+
+/** Copy exactly `keys` from `obj`. An allowlist, never a spread — see resolvePolicy's note. */
+function pick(obj, keys) {
+  const out = {};
+  for (const k of keys) {
+    if (obj && Object.prototype.hasOwnProperty.call(obj, k)) out[k] = obj[k];
+  }
+  return out;
+}
+
+/**
+ * Build the policy half from the base ref's config (or from nothing at all).
+ *
+ * Every block is materialized from built-in defaults upward. Head is not in the lookup chain —
+ * not as a fallback, not for a block that base merely omits. That last part is the subtle one:
+ * implementing this as "load head's config, then patch the policy keys over the top" leaves HEAD's
+ * value in place wherever base omits a block, because there is no key to overwrite it with.
+ * Omission is not override, and a field-by-field test does not catch it.
+ */
+function resolvePolicy(baseConfig) {
+  const b = baseConfig || {};
+  const policy = {
+    // An explicit [] at base means "skip nothing" and must survive; only absence takes the default.
+    skipGlobs: Array.isArray(b.skipGlobs) ? b.skipGlobs : DEFAULT_SKIP_GLOBS,
+    workdir: (typeof b.workdir === 'string' && b.workdir) ? b.workdir : '.',
+    gating: { ...(b.gating || {}) },        // resolveGating() layers DEFAULT_GATING over this
+    isolation: { ...(b.isolation || {}) },  // resolveIsolation() layers DEFAULT_ISOLATION
+    secrets: { ...DEFAULT_SECRETS, ...(b.secrets || {}) },
+    timeouts: { ...DEFAULT_TIMEOUTS, ...(b.timeouts || {}) },
+    smoke: { ...(b.smoke || {}) },
+    crap: { ...DEFAULT_CRAP, ...(b.crap || {}) },
+    deps: { ...DEFAULT_DEPS, ...(b.deps || {}) },
+    judge: { ...(b.judge || {}) },
+  };
+
+  // The jail image must not be steerable from head. resolveIsolation() picks it from
+  // `config.language`, which is MECHANICS — so pin it here from the language BASE declares, and
+  // only fall through to the head-detected language when base declares none. The residual is then
+  // bounded: with no base language a PR can nudge the image among four pinned official images,
+  // whose only effect is failing Tier 1 — which it could achieve anyway by breaking the build.
+  if (!policy.isolation.image && b.language && IMAGE_BY_LANGUAGE[b.language]) {
+    policy.isolation.image = IMAGE_BY_LANGUAGE[b.language];
+  }
+
+  // `drive` materializes ONLY when base declares it — note the absence of a `{}` default. Two
+  // reasons. Auto-detection's suggestDrive() pre-fills a startCommand from head's package.json,
+  // and `drive.url` is taken VERBATIM as a fetch origin by joinUrl() and probed with Felix's own
+  // fetch, outside the Docker jail. flows.js fences `goto` to same-origin paths so a flow cannot
+  // become an SSRF hop; the origin itself was never fenced.
+  if (b.drive) policy.drive = { ...b.drive };
+  return policy;
+}
+
+/**
+ * Resolve `workdir` to a real absolute path that is genuinely inside the sandbox.
+ *
+ * `path.relative` rather than a string prefix test, which passes "/foo" vs "/foobar". `realpath`
+ * on the target because the sandbox is a worktree of attacker content: git commits symlinks
+ * (mode 120000), so a PR can replace the directory base names with a link pointing anywhere, and
+ * path.resolve is string math that would wave it through. That matters most in Docker mode, where
+ * wrapCommand mounts `-v <cwd>:/work` — an escaped cwd mounts an arbitrary host directory
+ * read-write into the jail and defeats its entire purpose.
+ *
+ * Hard error, never a fallback to '.': falling back runs install at the wrong root, install fails,
+ * and the verdict becomes INSUFFICIENT EVIDENCE → check conclusion `neutral` → does not block.
+ * That is the attacker's win condition, so refusing loudly is the only safe answer.
+ *
+ * Residual (not closed, do not claim otherwise): a TOCTOU race remains. PR code runs during
+ * `install` and can swap the directory for a symlink before the `test` spawn uses cwd. Handing
+ * back the pre-resolved realpath closes the common case, not the race; closing it properly needs
+ * an fd-based spawn Node does not offer.
+ */
+function resolveWorkdir(sandboxDir, workdir) {
+  const wd = workdir || '.';
+  if (path.isAbsolute(wd)) {
+    throw new Error(`felix.config.json workdir must be relative to the repo root: "${wd}"`);
+  }
+  const root = fs.realpathSync(sandboxDir);
+  let real;
+  try {
+    real = fs.realpathSync(path.resolve(root, wd));
+  } catch (_) {
+    throw new Error(`felix.config.json workdir "${wd}" does not exist in the PR tree.`);
+  }
+  const rel = path.relative(root, real);
+  if (rel !== '' && (rel.startsWith('..') || path.isAbsolute(rel))) {
+    throw new Error(`felix.config.json workdir "${wd}" escapes the sandbox.`);
+  }
+  return real;
+}
+
 function validate(config) {
   const errors = [];
   if (!config.commands || !config.commands.test) {
@@ -321,37 +448,92 @@ function validate(config) {
 }
 
 /**
- * Resolve the effective config for a target repo.
- * @param {string} repoPath  absolute path to the target repo checkout
- * @returns {{config:object, source:string, detected:boolean}}
+ * Parse a felix.config.json, refusing a broken one by name.
+ *
+ * Deliberately stricter than readJSON() above, which stays lenient because it reads THIRD-PARTY
+ * manifests (package.json, pyproject.toml) where a malformed file is the repo's own problem and
+ * detection should simply move on. A malformed *Felix* config is different: swallowing it means a
+ * repo that believes it configured gating silently has none — the quiet lie this change exists to
+ * remove. Head and base are both strict, for the same reason.
  */
-function loadConfig(repoPath) {
-  const configPath = path.join(repoPath, 'felix.config.json');
-  const user = exists(configPath) ? readJSON(configPath) : null;
+function parseConfigJSON(raw, where) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`${CONFIG_FILENAME} at ${where} is not valid JSON: ${e.message}`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${CONFIG_FILENAME} at ${where} must be a JSON object.`);
+  }
+  return parsed;
+}
+
+/**
+ * Resolve the effective config: POLICY from the base ref, MECHANICS from the PR head.
+ *
+ * `fetchBaseConfig` is injected rather than reached for directly, so the boundary is unit-testable
+ * without a network or a git fixture. Its contract is three-valued and the third value carries the
+ * safety property:
+ *
+ *   { present: true, raw }  — the file exists at base
+ *   { present: false }      — the ref resolved, the file is genuinely absent → built-in defaults
+ *   throws                  — the ref itself could not be read → REFUSE
+ *
+ * That last case must never fall back to head. Failing closed here costs a run; failing open hands
+ * the PR the policy it is judged by, which is the whole bug.
+ *
+ * @param {object} opts
+ * @param {string} opts.repoPath          local checkout of the PR head (mechanics + detection)
+ * @param {function} opts.fetchBaseConfig async () => ({present, raw?, ref?})
+ * @returns {Promise<{config:object, source:string, detected:boolean, policySource:string}>}
+ */
+async function loadConfig({ repoPath, fetchBaseConfig }) {
+  if (typeof fetchBaseConfig !== 'function') {
+    throw new Error('loadConfig requires a fetchBaseConfig() — policy must be read from the base ref.');
+  }
+
+  // ── POLICY — base ref only ──────────────────────────────────────────────
+  const base = await fetchBaseConfig();
+  const baseConfig = (base && base.present) ? parseConfigJSON(base.raw, 'the base ref') : null;
+  const policy = resolvePolicy(baseConfig);
+  const policySource = baseConfig
+    ? `${CONFIG_FILENAME} @ base ${(base && base.ref) || ''}`.trim()
+    : `built-in defaults (no ${CONFIG_FILENAME} at the base ref)`;
+
+  // ── MECHANICS — PR head ─────────────────────────────────────────────────
+  const configPath = path.join(repoPath, CONFIG_FILENAME);
+  const user = exists(configPath) ? parseConfigJSON(fs.readFileSync(configPath, 'utf8'), repoPath) : null;
   const detected = detect(repoPath);
 
   if (!user && !detected) {
     throw new Error(
-      `No felix.config.json at ${repoPath} and could not auto-detect the project type. ` +
-      'Add a felix.config.json (see felix.config.example.json).'
+      `No ${CONFIG_FILENAME} at ${repoPath} and could not auto-detect the project type. ` +
+      `Add a ${CONFIG_FILENAME} (see felix.config.example.json).`
     );
   }
 
-  const config = merge(detected, user);
+  // Allowlist-picked, then spread over policy. Because the two key sets are provably disjoint
+  // (enforced by a test), spread order cannot decide policy and no head key survives by omission.
+  const mechanics = pick(merge(detected, user), MECHANICS_KEYS);
+  const config = { ...policy, ...mechanics };
+
   const errors = validate(config);
   if (errors.length) {
     throw new Error(`Invalid Felix config:\n  - ${errors.join('\n  - ')}`);
   }
 
   const source = user
-    ? (detected ? 'felix.config.json (+ auto-detect fallback)' : 'felix.config.json')
+    ? (detected ? `${CONFIG_FILENAME} (+ auto-detect fallback)` : CONFIG_FILENAME)
     : `auto-detected (${detected.language})`;
 
   if (!user) logger.info(`learned repo: ${source}`);
-  return { config, source, detected: !user };
+  logger.info(`policy: ${policySource}`);
+  return { config, source, detected: !user, policySource };
 }
 
 module.exports = {
-  loadConfig, detect, merge, validate,
+  loadConfig, detect, merge, validate, resolvePolicy, resolveWorkdir, parseConfigJSON,
+  POLICY_KEYS, MECHANICS_KEYS, CONFIG_FILENAME,
   DEFAULT_SKIP_GLOBS, DEFAULT_TIMEOUTS, DEFAULT_SECRETS, DEFAULT_CRAP, DEFAULT_DEPS,
 };
