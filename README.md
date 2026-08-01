@@ -148,6 +148,39 @@ To run Felix on this repo's own PRs, add a `.github/workflows/felix.yml` — see
 is auto-detected. See [`felix.config.example.json`](./felix.config.example.json).
 Auto-detection currently covers **node/ts, python, go, rust**.
 
+### Which half of the config a pull request can change
+
+This file is written by whoever opens the PR, so it is split at a trust boundary. **A pull
+request cannot change the policy it is judged by.**
+
+| | Fields | Read from |
+|---|---|---|
+| **Policy** | `skipGlobs` · `workdir` · `gating` · `isolation` · `secrets` · `timeouts` · `smoke` · `crap` · `deps` · `drive` · `judge` | the **base ref** — the PR's own copy is ignored |
+| **Mechanics** | `language` · `commands` · `test` | the **PR head** |
+
+Policy is read from `felix.config.json` at `pull_request.base.sha`. Change it the way you
+change any other protected thing: open a PR, get it reviewed, merge it. It takes effect for
+PRs opened *after* it lands. If the base ref has no config, policy is the built-in defaults —
+never the PR's values. If the base ref can't be read at all, Felix **refuses to verify** rather
+than fall back to head.
+
+Mechanics come from head on purpose: a PR that adds a test runner, renames a script or
+switches tooling has to be verified with *its* commands. Note this means `commands.test` is
+still PR-controlled — but so is the `package.json` script it usually points at, so locking it
+to base would buy nothing. What covers that is the rule below.
+
+**Felix's own control surface is never skipped.** `felix.config.json`, `package.json` (at any
+depth) and `.github/workflows/**` are always treated as behavioural, whatever `skipGlobs` says
+— the default globs would otherwise let a PR touching only those merge unverified and change
+the base that everything above trusts. The practical effect: **dependency-bump PRs now get
+fully verified instead of skipped.** That is intended; a lockfile bump is behavioural.
+
+> **Marking the check Required?** Set `"gating": { "blockOn": ["NOT VERIFIED", "INSUFFICIENT
+> EVIDENCE"] }` in the base config. GitHub counts `neutral` and `skipped` as *passing*, and
+> INSUFFICIENT EVIDENCE maps to `neutral` — so with the default `blockOn` a PR with no
+> acceptance criteria, a broken install, or a fork PR (no judge secret) does not block. The
+> trust boundary makes the policy honest; it does not by itself make the gate hard.
+
 ### Driving the app (opt-in)
 
 Building and testing a PR can pass while the running app is broken. When `drive.enabled`,
@@ -236,6 +269,22 @@ own scan to advisory. Use gitleaks, or trufflehog with verification **off** — 
 verification, which fires network requests using attacker-controlled PR content (SSRF/egress
 risk on untrusted diffs).
 
+**Both scanners run BEFORE `install`, on the pristine checkout.** Every later Tier 1 step
+executes the PR's own scripts, and any of them can rewrite the file the scan is about to
+read — so evidence gathered after them is evidence the PR was allowed to edit. One consequence
+for adopters: **a scanner that arrives via the PR's own `npm install` no longer works**, and it
+never really did. If the gate is installed by the party being gated, that party can pin its
+version, shadow its binary, or overwrite it in `postinstall`. Install your scanner on the
+runner instead — a workflow step, or a preinstalled binary. (In `isolation.mode: "docker"`
+this was already true: the external scan runs with the network denied, so a fetch-on-demand
+`npx <scanner>` has never worked there.)
+
+The scan reads changed files from the **repo root**, not from `workdir`. Paths from the GitHub
+API are repo-root-relative, so under a `workdir` the two disagreed and every read silently
+missed — a repo with a workdir set got `no secrets in changed files` without a single file
+being opened. If Felix cannot determine the root it now refuses the run rather than scanning
+blind.
+
 ### Dependency direction (opt-in)
 
 Building and testing a PR tells you nothing about the *shape* of its import graph. When
@@ -307,9 +356,43 @@ judges in one pass while the OpenAI seat chunks the same diff).
 
 ## Safety
 
-Felix runs untrusted PR scripts. Phase 1 mitigations: hand-run on trusted repos,
-no secrets injected into the sandbox, hard per-command timeouts with process-group
-kill. Stronger isolation (container/VM, egress limits) is a later phase.
+Felix runs untrusted PR scripts. Baseline mitigations: no secrets injected into the sandbox,
+hard per-command timeouts with process-group kill, and the policy half of `felix.config.json`
+read from the base ref so a PR cannot choose the rules it is judged by.
+
+### `isolation.mode: "docker"`
+
+Opt-in container jail for every Tier 1 command: no network except install, memory/CPU/pid caps,
+a non-root user, `--cap-drop ALL`, and a read-only root with only the mounted worktree and `/tmp`
+writable.
+
+**It is now fail-closed, and that is adopter-visible.** Three configurations that used to run
+anyway now stop the build with an error naming the exact line to change:
+
+| Config | Was | Now |
+| --- | --- | --- |
+| `mode` not exactly `"none"` or `"docker"` — e.g. `"Docker"` | ran on the **host**, no warning | hard error |
+| a misspelled key — e.g. `{"Mode": "docker"}` | ignored, so `mode` stayed `"none"` | hard error |
+| `mode: "docker"` **and** `drive.startCommand` set | drive booted the app on the **host**, outside the jail | hard error — pick one |
+| `mode: "docker"` where the runner has no docker | install "failed" → INSUFFICIENT EVIDENCE, which **passes** a Required check | hard error, before any PR code runs |
+
+If a repo is running one of these today it is not jailed, whatever its config says. The fix is
+one line; the error message tells you which.
+
+Docker mode also sets `HOME`, `XDG_CACHE_HOME`, `npm_config_cache`, `GOPATH` and `CARGO_HOME`
+into the `/tmp` tmpfs. Without that, the read-only root left `HOME=/` and `npm ci` died on `mkdir '/.npm'` — so docker
+mode had never once completed a Node install. That is measured, not assumed: `npm run test:jail`
+runs a real install in a real container *and* runs the pre-fix shape as a control that must fail. Two consequences
+worth knowing: a test that reads `HOME` sees `/tmp`, and the package caches now count against
+`isolation.tmpfsSize` (default raised `512m` → `1g`; raise it further for a heavy install).
+
+**Python note:** under `--read-only`, `pip install` into the image's global `site-packages` fails.
+Use a venv inside the worktree — `python -m venv .venv && .venv/bin/pip install -r requirements.txt`.
+
+Known gap: a jailed `drive` does not exist. It needs a container lifecycle with orphan cleanup,
+and publishing a port would force `--network bridge` — handing untrusted code the runtime egress
+the net-deny test steps withhold. Felix's own browser would still render attacker-served pages on
+the host. Refusing the combination is honest; a half-jail would not be.
 
 ### Untrusted content in the judge prompt
 
@@ -349,9 +432,11 @@ environment does not touch that — it needs a workflow change.
 ## Tests
 
 ```bash
-npm test        # 256 offline unit tests + 23 golden judge cases, no network
+npm test        # 300 offline unit tests + 23 golden judge cases, no network
 npm run test:crap   # end-to-end: real c8 + escomplex prove the CRAP criteria
 npm run test:live   # end-to-end: drives a real browser against a real app (needs Playwright)
+npm run test:jail   # end-to-end: a real npm install inside a real container (needs docker)
+npm run test:hooks  # end-to-end: does `git worktree add` leak the env to a post-checkout hook?
 ```
 
 `npm test` covers the pure/deterministic surface (config detection, spec parsing, the verdict

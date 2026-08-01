@@ -45,10 +45,30 @@ jobs:
       - name: test
         run: npm test
 
-  # The unit suite can only prove that buildCleanEnv() is CALLED. Whether a real `git worktree
-  # add` runs a real post-checkout hook, and whether that hook really inherits the parent's
-  # environment, is a claim about git — so it gets checked against git, on a second platform,
-  # with a control that must fail before the fix. See scripts/probe-hook-env-leak.js.
+  # The unit suite builds the docker command string and asserts its shape; it cannot tell you
+  # whether that string actually runs, because the dev box this was written on has no docker.
+  # The bug this guards — a read-only HOME making `npm ci` impossible inside the jail — lived
+  # undetected precisely in that gap. So one job runs a real install inside a real container.
+  #
+  # It is differential: it also runs the pre-fix command shape as a control and requires that one
+  # to FAIL. If the control passes, the probe exits non-zero and says the diagnosis was wrong.
+  # A green run is only worth something if the control could have gone red.
+  docker-jail:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: install
+        run: npm ci
+      - name: probe the docker jail with a real install
+        run: node scripts/probe-docker-jail.js
+
+  # Same shape, different claim. The unit suite can only prove that buildCleanEnv() is CALLED.
+  # Whether a real `git worktree add` runs a real post-checkout hook, and whether that hook
+  # really inherits the parent's environment, is a claim about git — so it gets checked against
+  # git, with a control that must fail before the fix. See scripts/probe-hook-env-leak.js.
   hook-env-leak:
     runs-on: ubuntu-latest
     steps:

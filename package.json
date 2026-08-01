@@ -12,6 +12,8 @@
     "calibrate": "node test/calibrate.js",
     "test:crap": "node test/crap-live.js",
     "test:live": "node test/live-flows.js",
+    "test:jail": "node scripts/probe-docker-jail.js",
+    "test:hooks": "node scripts/probe-hook-env-leak.js",
     "test:deps": "node test/deps-live.js"
   },
   "keywords": [

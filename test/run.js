@@ -13,13 +13,16 @@ const path = require('path');
 const Module = require('module');
 const { createRequire } = Module;
 
-const { detect, merge, validate } = require('../src/engine/config');
+const {
+  detect, merge, validate, loadConfig, resolveWorkdir,
+  POLICY_KEYS, MECHANICS_KEYS, DEFAULT_SKIP_GLOBS, DEFAULT_SECRETS,
+} = require('../src/engine/config');
 const { extractCriteria, buildSpec, linkedIssueNumbers } = require('../src/engine/spec');
 const { compose, VERDICTS, conclusionFor } = require('../src/engine/verdict');const { assertCrossFamily, buildPrompt, createJudge, mergeChunkRulings, chunkVerdict, PROVIDERS } = require('../src/engine/judge');
 const {
   estimateTokens, tokensToChars, splitDiffByFile, packChunks, planJudgeCalls, paceMs,
 } = require('../src/engine/budget');
-const { scanSecrets, shannonEntropy, looksLikeRealSecret } = require('../src/engine/tier1');
+const { scanSecrets, shannonEntropy, looksLikeRealSecret, runTier1 } = require('../src/engine/tier1');
 const {
   parseAddedLines, matchCoverageKey, attributeStatements, functionCoverage, crapScore,
   methodIsChanged, analyzeFileParsed, coverageAllZero, isLikelyGenerated, buildCrapRow,
@@ -31,8 +34,8 @@ const {
 const picomatchLib = require('picomatch');
 const { parseTarget } = require('../src/engine/github');
 const { render } = require('../src/engine/comment');
-const { triageFiles, triggerGate } = require('../src/engine');
-const { resolveIsolation, wrapCommand } = require('../src/engine/isolation');
+const { triageFiles, triggerGate, NEVER_SKIP, baseConfigFetcher, run: felixRun } = require('../src/engine');
+const { resolveIsolation, wrapCommand, assertJailCoherent, preflightDocker } = require('../src/engine/isolation');
 const { renderError } = require('../src/engine/comment');
 const { computeMetrics, OUTCOMES } = require('../src/engine/calibration');
 const { resolveGating, gateDecision } = require('../src/engine/gating');
@@ -681,6 +684,179 @@ test('DEFAULT_SECRETS carries an empty externalScan (opt-in); merge preserves a 
   assert.strictEqual(merge({}, { secrets: { externalScan: 'gitleaks detect --no-git' } }).secrets.externalScan, 'gitleaks detect --no-git');
 });
 
+// ── Tier 1 evidence integrity (F10, F10b, smoke.expect) ──────────────────────────────────
+// These drive runTier1 END TO END on purpose. Unit-testing scanSecrets in isolation cannot
+// see any of these bugs: in every case the function is correct and the CALL SITE is wrong.
+console.log('tier1 evidence integrity — the scan must inspect what it claims to');
+
+// Split so this file never contains a literal Felix's own scanner would flag.
+const AWS_SHAPED = 'AKIA' + 'IOSFODNN7EXAMPLE';
+
+/** A minimal repo runTier1 will accept: package.json + whatever else the case needs. */
+function tier1Repo(extra = {}) {
+  const d = tmpdir();
+  fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ name: 'fixture', version: '1.0.0' }));
+  for (const [rel, body] of Object.entries(extra)) {
+    fs.mkdirSync(path.join(d, path.dirname(rel)), { recursive: true });
+    fs.writeFileSync(path.join(d, rel), body);
+  }
+  return d;
+}
+const NO_CMDS = { install: '', smoke: '', test: '', preTest: '', lint: '', typecheck: '', testOne: '' };
+const idxOf = (results, name) => results.findIndex((r) => r.name === name);
+const rowsNamed = (results, name) => results.filter((r) => r.name === name);
+
+atest('F10: a PR that erases its own planted secret during install is still caught', async () => {
+  // The attack: plant a real key, then scrub it from disk in a step that runs before the scan.
+  const d = tier1Repo({
+    'leak.js': `const key = '${AWS_SHAPED}';\n`,
+    'scrub.js': "const fs=require('fs');fs.writeFileSync('leak.js','const key = 1;\\n');\n",
+  });
+  const files = [{ filename: 'leak.js', status: 'modified' }, { filename: 'scrub.js', status: 'added' }];
+  const { results } = await runTier1({
+    cwd: d, repoRoot: d, env: process.env, files, filesAll: files,
+    repoPath: d, baseSha: 'HEAD', headSha: 'HEAD',
+    config: { commands: { ...NO_CMDS, install: 'node scrub.js' }, timeouts: {}, smoke: {}, secrets: {} },
+  });
+
+  // Anti-vacuity: the scrub MUST actually have happened. Without this the test would pass
+  // for the wrong reason if the install command silently failed to run at all.
+  assert.strictEqual(fs.readFileSync(path.join(d, 'leak.js'), 'utf8').trim(), 'const key = 1;',
+    'the install step did not scrub the file — this test is not exercising the attack');
+
+  const scan = rowsNamed(results, 'secrets scan');
+  assert.strictEqual(scan.length, 1, 'exactly one secrets scan row');
+  assert.strictEqual(scan[0].status, 'fail', 'the scrubbed secret must still be reported');
+  assert.strictEqual(scan[0].hard, true);
+  assert.ok(idxOf(results, 'secrets scan') < idxOf(results, 'install'),
+    'the scan must run BEFORE install, not merely eventually');
+});
+
+atest('F10: the external scanner is also gathered before install runs', async () => {
+  const d = tier1Repo({ 'order.js': 'const x = 1;\n' });
+  const files = [{ filename: 'order.js', status: 'modified' }];
+  const { results } = await runTier1({
+    cwd: d, repoRoot: d, env: process.env, files, filesAll: files,
+    repoPath: d, baseSha: 'HEAD', headSha: 'HEAD',
+    config: {
+      commands: { ...NO_CMDS, install: 'node -v' }, timeouts: {}, smoke: {},
+      secrets: { externalScan: 'node -e "process.exit(0)"' },
+    },
+  });
+  assert.ok(idxOf(results, 'secrets scan (external)') < idxOf(results, 'install'),
+    'the HARD secrets gate must not run after attacker code has had a turn');
+  // The built-in stays as an advisory backstop, and is not double-gated.
+  assert.strictEqual(rowsNamed(results, 'secrets scan')[0].hard, false);
+});
+
+atest('F10b: a repo with a workdir still gets a real secrets scan (it had none)', async () => {
+  // f.filename is repo-root-relative; cwd is workdir-resolved. Joining them looks in a
+  // directory that does not exist, and `catch { continue }` turns that into a clean pass.
+  const root = tier1Repo({ 'src/creds.js': `const key = '${AWS_SHAPED}';\n`, 'app/package.json': '{"name":"app"}' });
+  const files = [{ filename: 'src/creds.js', status: 'modified' }];
+  const { results } = await runTier1({
+    cwd: path.join(root, 'app'), repoRoot: root, env: process.env, files, filesAll: files,
+    repoPath: root, baseSha: 'HEAD', headSha: 'HEAD',
+    config: { commands: { ...NO_CMDS }, timeouts: {}, smoke: {}, secrets: {} },
+  });
+  const scan = rowsNamed(results, 'secrets scan')[0];
+  assert.strictEqual(scan.status, 'fail',
+    'the changed file lives at the repo root — the scan must read it there, not under workdir');
+});
+
+atest('a failed install still yields exactly one secrets scan row, and it is the real one', async () => {
+  const d = tier1Repo({ 'leak.js': `const key = '${AWS_SHAPED}';\n` });
+  const files = [{ filename: 'leak.js', status: 'modified' }];
+  const { results, installFailed } = await runTier1({
+    cwd: d, repoRoot: d, env: process.env, files, filesAll: files,
+    repoPath: d, baseSha: 'HEAD', headSha: 'HEAD',
+    config: { commands: { ...NO_CMDS, install: 'node -e "process.exit(1)"' }, timeouts: {}, smoke: {}, secrets: {} },
+  });
+  assert.strictEqual(installFailed, true);
+  const scan = rowsNamed(results, 'secrets scan');
+  assert.strictEqual(scan.length, 1, 'the install-failure placeholders must not duplicate the real row');
+  assert.strictEqual(scan[0].status, 'fail', 'the real scan already ran — it is not a skip');
+});
+
+console.log('tier1 — smoke.expect is actually asserted');
+
+atest('smoke.expect passes when the string is in the output', async () => {
+  const d = tier1Repo({ 'build.js': "console.log('Listening on 4173');\n" });
+  const { results } = await runTier1({
+    cwd: d, repoRoot: d, env: process.env, files: [], filesAll: [],
+    repoPath: d, baseSha: 'HEAD', headSha: 'HEAD',
+    config: { commands: { ...NO_CMDS, smoke: 'node build.js' }, timeouts: {}, smoke: { expect: 'Listening on' }, secrets: {} },
+  });
+  assert.strictEqual(rowsNamed(results, 'build/smoke')[0].status, 'pass');
+});
+
+atest('smoke.expect FAILS when the string is absent, even on exit 0', async () => {
+  const d = tier1Repo({ 'build.js': "console.log('build finished with 0 errors');\n" });
+  const { results } = await runTier1({
+    cwd: d, repoRoot: d, env: process.env, files: [], filesAll: [],
+    repoPath: d, baseSha: 'HEAD', headSha: 'HEAD',
+    config: { commands: { ...NO_CMDS, smoke: 'node build.js' }, timeouts: {}, smoke: { expect: 'Listening on' }, secrets: {} },
+  });
+  const smoke = rowsNamed(results, 'build/smoke')[0];
+  assert.strictEqual(smoke.status, 'fail');
+  assert.strictEqual(smoke.hard, true, 'a configured expectation is a hard gate');
+  assert.match(smoke.detail, /Listening on/, 'the detail must name the string that was missing');
+});
+
+atest('smoke.expect matches against the FULL output, not the truncated tail', async () => {
+  // The expected line is printed FIRST and then buried under noise. runCheck stores only
+  // tail(combined, 4000) — asserting against that would fail a perfectly correct build.
+  const d = tier1Repo({
+    'build.js': "console.log('Listening on 4173');\nconsole.log('x'.repeat(10000));\n",
+  });
+  const { results } = await runTier1({
+    cwd: d, repoRoot: d, env: process.env, files: [], filesAll: [],
+    repoPath: d, baseSha: 'HEAD', headSha: 'HEAD',
+    config: { commands: { ...NO_CMDS, smoke: 'node build.js' }, timeouts: {}, smoke: { expect: 'Listening on' }, secrets: {} },
+  });
+  const smoke = rowsNamed(results, 'build/smoke')[0];
+  assert.ok(!smoke.output.includes('Listening on'), 'precondition: the line is off the end of the stored tail');
+  assert.strictEqual(smoke.status, 'pass', 'a build that printed the string early must still pass');
+});
+
+atest('smoke.expect set with no smoke command FAILS rather than skipping silently', async () => {
+  // A hard SKIP does not gate (verdict.js filters on hard && status === "fail"), so the
+  // old shape let a configured expectation evaporate.
+  const d = tier1Repo();
+  const { results } = await runTier1({
+    cwd: d, repoRoot: d, env: process.env, files: [], filesAll: [],
+    repoPath: d, baseSha: 'HEAD', headSha: 'HEAD',
+    config: { commands: { ...NO_CMDS }, timeouts: {}, smoke: { expect: 'Listening on' }, secrets: {} },
+  });
+  const smoke = rowsNamed(results, 'build/smoke')[0];
+  assert.strictEqual(smoke.status, 'fail');
+  assert.match(smoke.detail, /commands\.smoke/, 'the detail must say why there was nothing to assert against');
+});
+
+atest('runTier1 REFUSES a workdir run with no repoRoot rather than scanning the wrong place', async () => {
+  const d = tier1Repo({ 'app/package.json': '{"name":"app"}' });
+  await assert.rejects(
+    () => runTier1({
+      cwd: path.join(d, 'app'), env: process.env, files: [], filesAll: [],
+      repoPath: d, baseSha: 'HEAD', headSha: 'HEAD',
+      config: { commands: { ...NO_CMDS }, timeouts: {}, smoke: {}, secrets: {}, workdir: 'app' },
+    }),
+    /repoRoot/,
+    'a forgotten repoRoot under a workdir must be an error, not a silently blind scan',
+  );
+});
+
+// The guard above cannot fire for workdir "." — which is the common case — so it does NOT
+// prove index.js still threads repoRoot. Deleting that one argument left the whole suite
+// green when this was mutated. Pin the wiring at the source, the same way the version
+// single-source check below does.
+test('index.js threads repoRoot into runTier1 (the arg the unit tests cannot see)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'engine', 'index.js'), 'utf8');
+  const call = src.slice(src.indexOf('await runTier1({'), src.indexOf('await runTier1({') + 400);
+  assert.ok(/\brepoRoot:\s*sandbox\.dir\b/.test(call),
+    'index.js must pass repoRoot: sandbox.dir — without it the secrets scan reads the workdir');
+});
+
 console.log('housekeeping — version single-source + log DRY (R5)');
 test('the Felix version is single-sourced from package.json (no stale hardcodes)', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
@@ -770,6 +946,205 @@ test('rejects flag-injection via pidsLimit / tmpfsSize', () => {
   assert.throws(() => wrapCommand('npm test', { isolation: bad1, cwd: '/w' }), /pidsLimit/);
   const bad2 = resolveIsolation({ isolation: { mode: 'docker', tmpfsSize: '512m --network=host' } });
   assert.throws(() => wrapCommand('npm test', { isolation: bad2, cwd: '/w' }), /tmpfsSize/);
+});
+
+// ── PR E: the jail is either on or it is an error — never silently off ───────
+//
+// Every test below was written RED, against the shipped behaviour, and each one
+// names the concrete thing that goes wrong when it fails.
+console.log('isolation: fail-closed (PR E)');
+
+// F4. wrapCommand's gate was `iso.mode !== 'docker'` -> return the bare command. Any value
+// that is not that exact string therefore meant "run it on the host", with no warning, while
+// the repo owner reads their own config and believes they are jailed. Measured before the fix:
+// "Docker", "DOCKER", "dokcer", " docker", "docker ", true, 1, null and "podman" ALL host-exec.
+// A capital D is the likeliest human typo and it silently removed the entire sandbox.
+// The whole config→command path sits inside assert.throws on purpose: the property is "there is
+// no route from this config to an unjailed command", so it must not matter which of the two
+// choke points does the rejecting.
+test('an unrecognized isolation.mode is a hard error, never a silent host exec', () => {
+  for (const mode of ['Docker', 'DOCKER', 'dokcer', ' docker', 'docker ', 'podman', true, 1]) {
+    assert.throws(
+      () => wrapCommand('npm ci', { isolation: resolveIsolation({ isolation: { mode } }), cwd: '/w' }),
+      /isolation\.mode/,
+      `mode ${JSON.stringify(mode)} must be rejected, not quietly run on the host`
+    );
+  }
+});
+
+// The wrong-case KEY case. `{"Mode":"docker"}` leaves the resolved mode at its "none" default, so
+// no value check can see it — the owner reads "docker" in their config and has no jail.
+test('a misspelled isolation key is a hard error, not a silently ignored one', () => {
+  for (const bad of [{ Mode: 'docker' }, { mode: 'docker', readOnly: false }, { Network: 'allow' }]) {
+    assert.throws(
+      () => resolveIsolation({ isolation: bad }),
+      /unknown isolation key/,
+      `${JSON.stringify(bad)} must be rejected`
+    );
+  }
+});
+
+test('an unrecognized isolation.network is a hard error', () => {
+  assert.throws(() => resolveIsolation({ isolation: { mode: 'docker', network: 'Deny' } }), /isolation\.network/);
+  assert.throws(() => resolveIsolation({ isolation: { mode: 'docker', network: true } }), /isolation\.network/);
+});
+
+// Throwing is the fail-CLOSED choice here and that is not obvious, so it is written down:
+// a throw propagates out of runTier1, out of run(), and bin/felix.js exits 3 — the CI job
+// fails and no check run is ever created, so a Required check cannot go green. Returning
+// INSUFFICIENT EVIDENCE instead would map to `neutral`, which GitHub counts as PASSING.
+test('the two supported modes still work and are the only ones', () => {
+  assert.strictEqual(wrapCommand('npm ci', { isolation: resolveIsolation({}), cwd: '/w' }), 'npm ci');
+  const docker = resolveIsolation({ isolation: { mode: 'docker' } });
+  assert.match(wrapCommand('npm ci', { isolation: docker, cwd: '/w' }), /^docker run --rm/);
+});
+
+// F14. `--read-only` + `-u <uid>:<gid>` for a uid with no /etc/passwd entry leaves container
+// HOME at `/`, which is on the read-only layer. npm writes its cache and _logs under $HOME,
+// so `npm ci` — the default install command — dies on `mkdir '/.npm'`. Docker mode had therefore
+// never once completed an install for a Node repo; confirmed live by the CI probe's control run,
+// which fails in 884ms. The errno is ENOENT, not the EROFS you would predict — the read-only
+// layer refuses the mkdir at `/` before any write is attempted. Same class for pip, go and cargo,
+// which is why the fix is a writable HOME rather than an npm-specific flag.
+test('docker mode gives the container a writable HOME', () => {
+  const iso = resolveIsolation({ isolation: { mode: 'docker' } });
+  const cmd = wrapCommand('npm ci', { isolation: iso, cwd: '/w', network: 'allow' });
+  const home = cmd.match(/-e HOME=(\S+)/);
+  assert.ok(home, 'docker run must set an explicit HOME');
+  const target = home[1].replace(/'/g, '');
+  assert.ok(
+    /^(\/tmp|\/work)/.test(target),
+    `HOME=${target} must point at a writable mount (the /tmp tmpfs or the /work bind), not the read-only root`
+  );
+});
+
+// The per-language caches live outside HOME for some toolchains, so a writable HOME alone is
+// not enough — each must be pointed somewhere writable or the same failure returns wearing a
+// different name.
+test('docker mode redirects the per-language package caches somewhere writable', () => {
+  const iso = resolveIsolation({ isolation: { mode: 'docker' } });
+  const cmd = wrapCommand('pip install -r requirements.txt', { isolation: iso, cwd: '/w', network: 'allow' });
+  for (const v of ['XDG_CACHE_HOME', 'npm_config_cache']) {
+    assert.match(cmd, new RegExp(`-e ${v}=`), `${v} must be pinned to a writable path`);
+  }
+});
+
+// F13. drive.js:351 spawns plan.startCommand with plain child_process.spawn and never calls
+// wrapCommand, so with mode:"docker" the PR's own app boots ON THE HOST, outside every cap.
+// Reproduced before the fix by a probe whose start command wrote a marker to a path OUTSIDE the
+// sandbox cwd — impossible from inside a --read-only container that mounts only /work — and the
+// marker appeared, carrying Felix's own HOME.
+//
+// The fix is refusal, not a jailed drive. Jailing the app would need a container lifecycle with
+// orphan cleanup, and port publishing forces --network bridge (handing untrusted code runtime
+// egress the net-deny test steps deliberately withhold). It would still leave Felix's chromium
+// running --no-sandbox ON THE HOST against attacker-served pages, so a half-jail here would
+// claim containment it does not have. Refusing says the true thing.
+test('docker isolation plus a drive start command is a hard error, not a host escape', () => {
+  const iso = resolveIsolation({ isolation: { mode: 'docker' } });
+  assert.throws(() => assertJailCoherent({ isolation: iso, hasDrivePlan: true }), /drive/);
+});
+test('drive without docker, and docker without drive, both stay allowed', () => {
+  const none = resolveIsolation({});
+  const docker = resolveIsolation({ isolation: { mode: 'docker' } });
+  assert.doesNotThrow(() => assertJailCoherent({ isolation: none, hasDrivePlan: true }));
+  assert.doesNotThrow(() => assertJailCoherent({ isolation: docker, hasDrivePlan: false }));
+});
+
+// F4 (the other half). With docker missing the wrapped command exits 127, the hard `install`
+// check "fails", and tier1 short-circuits to INSUFFICIENT EVIDENCE -> `neutral` — which GitHub
+// counts as PASSING a Required check. So a runner that quietly loses docker turns the security
+// upgrade itself into the merge bypass, while the comment blames the PR. The preflight runs
+// ZERO PR code, so its failure is provably the runner's fault by construction rather than by
+// parsing exit codes out of untrusted output.
+atest('docker mode refuses to start when docker is unavailable', async () => {
+  const iso = resolveIsolation({ isolation: { mode: 'docker' } });
+  const missing = async () => ({ code: 127, combined: 'docker: command not found', timedOut: false });
+  await assert.rejects(() => preflightDocker({ isolation: iso, run: missing }), /docker/);
+  const daemonDown = async () => ({ code: 1, combined: 'Cannot connect to the Docker daemon', timedOut: false });
+  await assert.rejects(() => preflightDocker({ isolation: iso, run: daemonDown }), /docker/);
+});
+atest('the preflight never runs in mode none, and passes when docker answers', async () => {
+  let calls = 0;
+  const spy = async () => { calls += 1; return { code: 0, combined: 'Docker version 27.0.0', timedOut: false }; };
+  await preflightDocker({ isolation: resolveIsolation({}), run: spy });
+  assert.strictEqual(calls, 0, 'mode none must not shell out to docker at all');
+  await preflightDocker({ isolation: resolveIsolation({ isolation: { mode: 'docker' } }), run: spy });
+  assert.strictEqual(calls, 1);
+});
+
+// These two exist because the unit tests above do NOT prove the guards are reachable. Measured:
+// commenting out both calls in index.js left 271 passed / 0 failed — the whole fix would have
+// shipped as dead code. So this drives the real run() and asserts it REJECTS, which is also the
+// property that matters at the gate: a rejection never reaches finalize(), so no check run is
+// created and a Required check cannot go green.
+function stubGitHubFor(baseConfig) {
+  const prior = globalThis.fetch;
+  const pr = {
+    number: 1, title: 'add a thing', body: 'closes #2', draft: false,
+    head: { sha: 'headsha', repo: { fork: false, full_name: 'o/r' } },
+    base: { sha: 'basesha', ref: 'main', repo: { full_name: 'o/r' } },
+    labels: [],
+  };
+  const reply = (body, type) => ({
+    ok: true, status: 200,
+    headers: { get: () => (type === 'json' ? 'application/json' : 'text/plain') },
+    json: async () => body,
+    text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
+  });
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (/\/contents\/felix\.config\.json/.test(u)) return reply(JSON.stringify(baseConfig), 'text');
+    if (/\/contents\?ref=/.test(u)) return reply([{ name: 'felix.config.json', type: 'file' }], 'json');
+    if (/\/files/.test(u)) return reply([{ filename: 'src/a.js', status: 'modified', additions: 3, deletions: 0 }], 'json');
+    if (/\/pulls\/1$/.test(u)) return reply(pr, 'json');
+    return reply({}, 'json');
+  };
+  return () => { globalThis.fetch = prior; };
+}
+
+// repoPath is a temp dir that is deliberately NOT a git repo, and that is what makes these tests
+// prove ORDERING rather than just rejection. The guards run at step 2b, before createSandbox; if
+// one were moved or removed, the run would get as far as `git worktree add` and reject with a git
+// error instead — a different message, so the assertion below fails. That ordering is the point:
+// throwing before the sandbox exists means no worktree of attacker content is ever created and
+// the base repo's post-checkout hook never fires.
+// A package.json so auto-detection can resolve the MECHANICS half (commands still come from
+// head); no `git init`, so createSandbox would fail loudly if it were ever reached.
+function notAGitRepo() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'felix-no-git-'));
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+    name: 'fixture', version: '1.0.0', scripts: { test: 'true' },
+  }));
+  return dir;
+}
+
+atest('run() refuses BEFORE the sandbox when the base config names an unknown isolation.mode', async () => {
+  const restore = stubGitHubFor({ isolation: { mode: 'Docker' }, commands: { test: 'true' } });
+  const repoPath = notAGitRepo();
+  try {
+    await assert.rejects(
+      () => felixRun({ target: 'o/r#1', repoPath, dryRun: true, post: false, env: { GITHUB_TOKEN: 't' } }),
+      /isolation\.mode/,
+      'a bad mode must abort the run at config load, not proceed with the jail silently off'
+    );
+  } finally { restore(); fs.rmSync(repoPath, { recursive: true, force: true }); }
+});
+
+atest('run() refuses BEFORE the sandbox when docker isolation is combined with drive', async () => {
+  const restore = stubGitHubFor({
+    isolation: { mode: 'docker' },
+    drive: { enabled: true, startCommand: 'npm start', routes: ['/'] },
+    commands: { test: 'true' },
+  });
+  const repoPath = notAGitRepo();
+  try {
+    await assert.rejects(
+      () => felixRun({ target: 'o/r#1', repoPath, dryRun: true, post: false, env: { GITHUB_TOKEN: 't' } }),
+      /drive/,
+      'docker + drive must abort the run, not boot the app on the host'
+    );
+  } finally { restore(); fs.rmSync(repoPath, { recursive: true, force: true }); }
 });
 
 console.log('trigger gate + self-error (Phase 2)');
@@ -2438,6 +2813,255 @@ test('arming is idempotent and disarm fully restores resolution', () => {
   const sentinel = path.join(dir, 'pwned.txt');
   const req = plantModule(dir, 'felix-plant-restored', sentinel);
   assert.strictEqual(req('felix-plant-restored').pwned, true, 'disarm restores normal resolution');
+});
+
+console.log('config trust boundary — a PR cannot change the policy it is judged by (F2, F3, F12)');
+
+// The base config is fetched over the GitHub contents API at pr.base.sha, so these tests inject
+// the fetcher rather than building git repos. Contract: resolve {present:true,raw} when the file
+// exists at base, {present:false} when the ref resolved but the file is genuinely absent, and
+// THROW when the ref itself could not be resolved. That third case must never reach head.
+const baseAt = (obj) => async () => ({ present: true, raw: JSON.stringify(obj) });
+const baseRaw = (raw) => async () => ({ present: true, raw });
+const baseAbsent = () => async () => ({ present: false });
+const baseUnreachable = (msg = 'base ref unresolvable') => async () => { throw new Error(msg); };
+
+/** A head checkout: a repo dir with a package.json and (optionally) a felix.config.json. */
+function headRepo(userConfig, pkg = { scripts: { test: 'node t.js' } }) {
+  const d = tmpdir();
+  fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify(pkg));
+  if (userConfig) fs.writeFileSync(path.join(d, 'felix.config.json'), JSON.stringify(userConfig));
+  return d;
+}
+
+// ── F3: the one-line Required-check bypass ───────────────────────────────────
+atest('a PR widening skipGlobs to ["**"] does not skip its own verification', async () => {
+  const repoPath = headRepo({ skipGlobs: ['**'] });
+  const { config } = await loadConfig({ repoPath, fetchBaseConfig: baseAbsent() });
+  assert.deepStrictEqual(config.skipGlobs, DEFAULT_SKIP_GLOBS,
+    'head skipGlobs must not reach the effective config');
+  const t = triageFiles([{ filename: 'src/a.js' }], config.skipGlobs);
+  assert.strictEqual(t.skipped, false, 'the PR must still be verified');
+});
+
+atest('base skipGlobs wins over head skipGlobs', async () => {
+  const repoPath = headRepo({ skipGlobs: ['**'] });
+  const { config } = await loadConfig({ repoPath, fetchBaseConfig: baseAt({ skipGlobs: ['vendor/**'] }) });
+  assert.deepStrictEqual(config.skipGlobs, ['vendor/**']);
+});
+
+// ── F2: gating, isolation, secrets, timeouts, workdir ────────────────────────
+atest('a PR cannot disable gating that the base ref enables', async () => {
+  const repoPath = headRepo({ gating: { enabled: false, blockOn: [] } });
+  const { config } = await loadConfig({
+    repoPath, fetchBaseConfig: baseAt({ gating: { enabled: true, blockOn: ['NOT VERIFIED'] } }),
+  });
+  const g = resolveGating(config);
+  assert.strictEqual(g.enabled, true);
+  assert.deepStrictEqual(g.blockOn, ['NOT VERIFIED']);
+  assert.strictEqual(gateDecision({ verdict: 'NOT VERIFIED', gating: g }).blocks, true);
+});
+
+atest('a PR cannot weaken the secrets gate, the timeouts, or the jail', async () => {
+  const repoPath = headRepo({
+    secrets: { sinRequiresKeyword: false, allowFiles: ['**'], externalScan: 'true' },
+    timeouts: { testMs: 1 },
+    isolation: { mode: 'none', image: 'attacker/evil' },
+  });
+  const { config } = await loadConfig({
+    repoPath,
+    fetchBaseConfig: baseAt({ isolation: { mode: 'docker' }, timeouts: { testMs: 600000 } }),
+  });
+  assert.deepStrictEqual(config.secrets.allowFiles, DEFAULT_SECRETS.allowFiles);
+  assert.strictEqual(config.secrets.externalScan, '');
+  assert.strictEqual(config.timeouts.testMs, 600000);
+  assert.strictEqual(config.isolation.mode, 'docker');
+  assert.notStrictEqual(config.isolation.image, 'attacker/evil');
+});
+
+// ── §5: omission is not override — the failure a field-by-field test misses ──
+atest('a hostile head config yields an effective config identical to the base-only one', async () => {
+  const pkg = { scripts: { test: 'npm run t' }, devDependencies: { vite: '^5', vitest: '^1' } };
+  const hostile = {
+    skipGlobs: ['**'], workdir: '../../..',
+    gating: { enabled: false }, isolation: { mode: 'none' },
+    secrets: { sinRequiresKeyword: false }, timeouts: { testMs: 1 },
+    smoke: { expect: 'anything', timeoutMs: 1 },
+    crap: { enabled: true, threshold: 0 }, deps: { enabled: true },
+    judge: { adversarial: false },
+    drive: { enabled: true, startCommand: 'sleep 1', url: 'http://169.254.169.254', port: 80, routes: ['/'] },
+  };
+  const hostileCfg = (await loadConfig({ repoPath: headRepo(hostile, pkg), fetchBaseConfig: baseAbsent() })).config;
+  const benignCfg = (await loadConfig({ repoPath: headRepo(null, pkg), fetchBaseConfig: baseAbsent() })).config;
+  assert.deepStrictEqual(hostileCfg, benignCfg,
+    'every policy block must come from base/defaults — an OMITTED base block must not let head win');
+});
+
+atest('detection cannot smuggle a drive block past the boundary', async () => {
+  // suggestDrive() pre-fills drive.startCommand from head's package.json. With no drive block at
+  // base, drive must not exist at all — otherwise head steers an unjailed fetch (SSRF).
+  const pkg = { scripts: { test: 'npm run t', preview: 'vite preview' }, devDependencies: { vite: '^5' } };
+  assert.ok(detect(headRepo(null, pkg)).drive, 'precondition: detection does suggest a drive block');
+  const { config } = await loadConfig({ repoPath: headRepo({ drive: { enabled: true } }, pkg), fetchBaseConfig: baseAbsent() });
+  assert.strictEqual(config.drive, undefined, 'no drive at base ⇒ no drive at all');
+});
+
+// ── Mechanics still come from head, or Felix could not verify new work ───────
+atest('mechanics (language, commands, test) still come from the PR head', async () => {
+  const repoPath = headRepo({ commands: { install: 'npm ci', test: 'npx vitest run' }, test: { filePattern: 'spec/**' } });
+  const { config } = await loadConfig({ repoPath, fetchBaseConfig: baseAt({ commands: { test: 'STALE' }, gating: { enabled: true } }) });
+  assert.strictEqual(config.commands.test, 'npx vitest run', 'a PR that changes its test command must be honoured');
+  assert.strictEqual(config.test.filePattern, 'spec/**');
+  assert.strictEqual(config.language, 'node');
+  assert.strictEqual(resolveGating(config).enabled, true, 'policy is still base-sourced alongside');
+});
+
+// ── The four base-read failure modes ─────────────────────────────────────────
+atest('no felix.config.json at base ⇒ built-in defaults, not an error', async () => {
+  const { config, policySource } = await loadConfig({ repoPath: headRepo(null), fetchBaseConfig: baseAbsent() });
+  assert.deepStrictEqual(config.skipGlobs, DEFAULT_SKIP_GLOBS);
+  assert.strictEqual(resolveGating(config).enabled, false);
+  assert.strictEqual(config.workdir, '.');
+  assert.match(policySource, /default/i);
+});
+
+atest('an unresolvable base ref is a hard error — it never falls back to head', async () => {
+  const repoPath = headRepo({ skipGlobs: ['**'], gating: { enabled: false } });
+  await assert.rejects(
+    () => loadConfig({ repoPath, fetchBaseConfig: baseUnreachable('boom') }),
+    /boom/,
+    'the failure must propagate, not be swallowed into head-sourced policy',
+  );
+});
+
+atest('loadConfig refuses outright when no fetchBaseConfig is supplied', async () => {
+  // Guards the seam itself: a future caller that forgets the fetcher must not silently get
+  // head-sourced policy back. There is no default, and no repoPath-only overload.
+  await assert.rejects(() => loadConfig({ repoPath: headRepo(null) }), /base ref/i);
+});
+
+// The refusal message + the trusted-only fallback chain live in the real fetcher, so test it.
+atest('baseConfigFetcher falls back sha → branch tip, and refuses when neither resolves', async () => {
+  const calls = [];
+  const fakeGh = (rootFor) => ({
+    listRootContents: async (o, r, ref) => { calls.push(ref); return rootFor[ref] || null; },
+    getRawFile: async () => '{"gating":{"enabled":true}}',
+  });
+
+  // sha 404s, branch tip resolves and has the file → policy still comes from trusted content.
+  const viaRef = await baseConfigFetcher(fakeGh({ main: [{ name: 'felix.config.json', type: 'file' }] }),
+    'o', 'r', { baseSha: 'deadsha', baseRef: 'main' })();
+  assert.deepStrictEqual(calls, ['deadsha', 'main']);
+  assert.strictEqual(viaRef.present, true);
+  assert.strictEqual(viaRef.ref, 'main');
+
+  // A ref that resolves but has no config → the soft "absent" path, not an error.
+  const absent = await baseConfigFetcher(fakeGh({ main: [{ name: 'README.md', type: 'file' }] }),
+    'o', 'r', { baseSha: 'main' })();
+  assert.deepStrictEqual(absent, { present: false, ref: 'main' });
+
+  // Neither resolves → refuse by name. This is the case that must never reach head.
+  await assert.rejects(
+    () => baseConfigFetcher(fakeGh({}), 'o', 'r', { baseSha: 'x', baseRef: 'y' })(),
+    /base ref[\s\S]*Refusing/,
+  );
+});
+
+atest('a malformed base config is a hard error, never a silent downgrade to defaults', async () => {
+  await assert.rejects(
+    () => loadConfig({ repoPath: headRepo(null), fetchBaseConfig: baseRaw('{ "gating": { enabled: true') }),
+    /base ref.*valid JSON|valid JSON.*base/i,
+  );
+});
+
+atest('a malformed HEAD config is a hard error, not a silent fall-through to auto-detect', async () => {
+  const d = tmpdir();
+  fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ scripts: { test: 'node t.js' } }));
+  fs.writeFileSync(path.join(d, 'felix.config.json'), '{ oops');
+  await assert.rejects(() => loadConfig({ repoPath: d, fetchBaseConfig: baseAbsent() }), /valid JSON/i);
+});
+
+// ── The key inventory: a new config field must be classified, not forgotten ──
+test('every config field the engine reads is in exactly one of POLICY_KEYS / MECHANICS_KEYS', () => {
+  const dir = path.join(__dirname, '..', 'src', 'engine');
+  const seen = new Set();
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { walk(p); continue; }
+      if (!e.name.endsWith('.js')) continue;
+      // Drop filename mentions first, or "felix.config.json" / "config.js" in prose read as
+      // fields named "json" / "js". No real config field is named for a file extension.
+      const src = fs.readFileSync(p, 'utf8').replace(/[\w.-]*config\.(js|json|example\.json)\b/gi, '');
+      for (const m of src.matchAll(/\bconfig\.([a-zA-Z_$][\w$]*)/g)) seen.add(m[1]);
+    }
+  };
+  walk(dir);
+  const classified = new Set([...POLICY_KEYS, ...MECHANICS_KEYS]);
+  const unclassified = [...seen].filter((k) => !classified.has(k));
+  assert.deepStrictEqual(unclassified, [],
+    `unclassified config field(s) — add each to POLICY_KEYS or MECHANICS_KEYS: ${unclassified.join(', ')}`);
+  const overlap = POLICY_KEYS.filter((k) => MECHANICS_KEYS.includes(k));
+  assert.deepStrictEqual(overlap, [], 'the two key sets must be disjoint, or spread order decides policy');
+});
+
+// ── F12: workdir cannot escape the sandbox ───────────────────────────────────
+console.log('workdir containment (F12)');
+test('resolveWorkdir accepts "." and a real subdirectory', () => {
+  const root = tmpdir();
+  fs.mkdirSync(path.join(root, 'app'));
+  assert.strictEqual(resolveWorkdir(root, '.'), fs.realpathSync(root));
+  assert.strictEqual(resolveWorkdir(root, 'app'), fs.realpathSync(path.join(root, 'app')));
+});
+
+test('resolveWorkdir refuses traversal, absolute paths, and a missing directory', () => {
+  const root = tmpdir();
+  assert.throws(() => resolveWorkdir(root, '../../..'), /escapes the sandbox/);
+  assert.throws(() => resolveWorkdir(root, 'app/../../..'), /escapes the sandbox/);
+  assert.throws(() => resolveWorkdir(root, path.resolve(os.tmpdir())), /must be relative/);
+  assert.throws(() => resolveWorkdir(root, 'nope'), /does not exist/);
+});
+
+test('resolveWorkdir refuses a sibling whose name merely shares the root prefix', () => {
+  // The classic prefix-test bug: "/foo" vs "/foobar". A string startsWith() check passes this.
+  const parent = tmpdir();
+  const root = path.join(parent, 'foo');
+  fs.mkdirSync(root); fs.mkdirSync(path.join(parent, 'foobar'));
+  assert.throws(() => resolveWorkdir(root, '../foobar'), /escapes the sandbox/);
+});
+
+test('resolveWorkdir refuses a symlink that points outside the sandbox', () => {
+  const root = tmpdir();
+  const outside = tmpdir();
+  let linked = false;
+  // Windows needs elevation/developer mode for symlinks; the assertion is real on CI (ubuntu).
+  try { fs.symlinkSync(outside, path.join(root, 'app'), 'junction'); linked = true; } catch (_) { /* skipped */ }
+  if (linked) assert.throws(() => resolveWorkdir(root, 'app'), /escapes the sandbox/);
+});
+
+// ── The control surface: skipGlobs must not be able to hide Felix's own inputs ──
+console.log('control-surface triage — skipGlobs cannot hide what decides the verdict');
+test('a PR touching only felix.config.json is NOT triaged away', () => {
+  const t = triageFiles([{ filename: 'felix.config.json' }], DEFAULT_SKIP_GLOBS);
+  assert.strictEqual(t.skipped, false, 'default **/*.json would otherwise skip it and merge it unverified');
+});
+
+test('a PR touching only package.json or a workflow is NOT triaged away', () => {
+  // package.json carries scripts.test — the body of commands.test for most Node repos. Skipping
+  // it lets `"test": "exit 0"` merge unverified, and every later PR passes Tier 1 from base.
+  assert.strictEqual(triageFiles([{ filename: 'package.json' }], DEFAULT_SKIP_GLOBS).skipped, false);
+  assert.strictEqual(triageFiles([{ filename: 'packages/api/package.json' }], DEFAULT_SKIP_GLOBS).skipped, false);
+  assert.strictEqual(triageFiles([{ filename: '.github/workflows/felix.yml' }], DEFAULT_SKIP_GLOBS).skipped, false);
+});
+
+test('an explicit skipGlobs cannot suppress the control surface either', () => {
+  assert.strictEqual(triageFiles([{ filename: 'felix.config.json' }], ['**']).skipped, false);
+  assert.ok(NEVER_SKIP.length > 0, 'NEVER_SKIP is the non-overridable list');
+});
+
+test('a genuinely non-behavioral PR is still skipped', () => {
+  const t = triageFiles([{ filename: 'README.md' }, { filename: 'docs/x.md' }], DEFAULT_SKIP_GLOBS);
+  assert.strictEqual(t.skipped, true, 'the triage short-circuit must survive — this is not a blanket disable');
 });
 
 // Run the deferred async tests (judge wire-contract) after the sync suite, then tally.
