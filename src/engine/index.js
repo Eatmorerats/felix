@@ -240,8 +240,11 @@ async function run(opts) {
     // `files` is the FULL getFiles list (unfiltered by triage) — the deps check needs the
     // widest set for its rename map + changed-file attribution gate. `triage.behavioral` is
     // the narrower behavioral subset used for the per-file test re-runs.
+    // repoRoot is the sandbox root, NOT `cwd`. Changed-file paths from the API are
+    // repo-root-relative, so anything that reads a changed file off disk must join from
+    // the root — under a workdir, `cwd` points somewhere those paths do not exist.
     const t1 = await runTier1({
-      cwd, env: sandbox.cleanEnv, config, files: triage.behavioral,
+      cwd, repoRoot: sandbox.dir, env: sandbox.cleanEnv, config, files: triage.behavioral,
       repoPath, baseSha: pr.base.sha, headSha, filesAll: files,
     });
     tier1 = t1.results;

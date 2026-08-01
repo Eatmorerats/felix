@@ -33,6 +33,7 @@
   },
 
   "smoke": {
+    "$comment": "'expect' is a substring the build/smoke output MUST contain. Setting it also promotes build/smoke to a HARD gate. It is matched against the FULL output, not the truncated tail stored in the report, so a build that prints the line early and then floods the log still passes. Set it and leave commands.smoke empty and the check FAILS — an expectation with nothing to assert against is a lie, not a skip. IMPORTANT: this is a WIRING check, not a security control. The output it matches is produced by the code under review, so a hostile PR satisfies it with `echo \"Listening on\"`. Use it to catch a build that silently stops booting, not to prove anything about intent.",
     "expect": "",
     "timeoutMs": 60000
   },
@@ -85,6 +86,7 @@
     "$comment": "Felix's built-in scan is a CHANGED-FILES BACKSTOP, not an authoritative repo scanner. For security-sensitive repos, set externalScan to a real scanner run as the HARD gate — Felix then demotes its own scan to advisory and defers. Use gitleaks (offline, no network) or trufflehog WITH verification OFF (never on — live verification fires network requests using attacker-controlled PR content: SSRF/egress risk on untrusted diffs). Empty = the built-in scan gates.",
     "allowFiles": ["**/*.fixture.*", "**/fixtures/**", "**/__mocks__/**"],
     "sinRequiresKeyword": true,
+    "$comment": "externalScan runs BEFORE install, on the pristine checkout, as the hard gate (the built-in scan is then advisory). Install the scanner ON THE RUNNER — a workflow step or a preinstalled binary. A scanner that arrives via the PR's own `npm install` is chosen by the party it is gating, which can pin its version, shadow its binary, or overwrite it in postinstall.",
     "externalScan": ""
   },
 

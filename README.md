@@ -269,6 +269,22 @@ own scan to advisory. Use gitleaks, or trufflehog with verification **off** — 
 verification, which fires network requests using attacker-controlled PR content (SSRF/egress
 risk on untrusted diffs).
 
+**Both scanners run BEFORE `install`, on the pristine checkout.** Every later Tier 1 step
+executes the PR's own scripts, and any of them can rewrite the file the scan is about to
+read — so evidence gathered after them is evidence the PR was allowed to edit. One consequence
+for adopters: **a scanner that arrives via the PR's own `npm install` no longer works**, and it
+never really did. If the gate is installed by the party being gated, that party can pin its
+version, shadow its binary, or overwrite it in `postinstall`. Install your scanner on the
+runner instead — a workflow step, or a preinstalled binary. (In `isolation.mode: "docker"`
+this was already true: the external scan runs with the network denied, so a fetch-on-demand
+`npx <scanner>` has never worked there.)
+
+The scan reads changed files from the **repo root**, not from `workdir`. Paths from the GitHub
+API are repo-root-relative, so under a `workdir` the two disagreed and every read silently
+missed — a repo with a workdir set got `no secrets in changed files` without a single file
+being opened. If Felix cannot determine the root it now refuses the run rather than scanning
+blind.
+
 ### Dependency direction (opt-in)
 
 Building and testing a PR tells you nothing about the *shape* of its import graph. When
