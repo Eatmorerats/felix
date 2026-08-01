@@ -20,6 +20,16 @@ concurrency:
   group: test-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Two separate limits, and neither one substitutes for the other.
+#
+# `permissions` scopes what GITHUB_TOKEN is ALLOWED to do; it is set here at workflow level so
+# every job below inherits it and no job can quietly widen it.
+#
+# `persist-credentials: false` on each checkout controls whether that token is left lying in
+# `.git/config` afterwards. actions/checkout writes it there by default, where any later step —
+# including anything the PR under test can influence — can simply read it. A read-only token is
+# still a token: it carries the run's identity and reads private repo contents. Nothing here
+# pushes, so no step needs the credential to survive the checkout.
 permissions:
   contents: read
 
@@ -34,6 +44,8 @@ jobs:
         node: ['20', '22']
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -57,6 +69,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -73,6 +87,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -94,6 +110,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
