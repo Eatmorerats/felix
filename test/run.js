@@ -35,7 +35,7 @@ const picomatchLib = require('picomatch');
 const { parseTarget } = require('../src/engine/github');
 const { render } = require('../src/engine/comment');
 const { triageFiles, triggerGate, NEVER_SKIP, baseConfigFetcher } = require('../src/engine');
-const { resolveIsolation, wrapCommand } = require('../src/engine/isolation');
+const { resolveIsolation, wrapCommand, assertJailCoherent, preflightDocker } = require('../src/engine/isolation');
 const { renderError } = require('../src/engine/comment');
 const { computeMetrics, OUTCOMES } = require('../src/engine/calibration');
 const { resolveGating, gateDecision } = require('../src/engine/gating');
@@ -724,6 +724,50 @@ test('docker mode redirects the per-language package caches somewhere writable',
   for (const v of ['XDG_CACHE_HOME', 'npm_config_cache']) {
     assert.match(cmd, new RegExp(`-e ${v}=`), `${v} must be pinned to a writable path`);
   }
+});
+
+// F13. drive.js:351 spawns plan.startCommand with plain child_process.spawn and never calls
+// wrapCommand, so with mode:"docker" the PR's own app boots ON THE HOST, outside every cap.
+// Reproduced before the fix by a probe whose start command wrote a marker to a path OUTSIDE the
+// sandbox cwd — impossible from inside a --read-only container that mounts only /work — and the
+// marker appeared, carrying Felix's own HOME.
+//
+// The fix is refusal, not a jailed drive. Jailing the app would need a container lifecycle with
+// orphan cleanup, and port publishing forces --network bridge (handing untrusted code runtime
+// egress the net-deny test steps deliberately withhold). It would still leave Felix's chromium
+// running --no-sandbox ON THE HOST against attacker-served pages, so a half-jail here would
+// claim containment it does not have. Refusing says the true thing.
+test('docker isolation plus a drive start command is a hard error, not a host escape', () => {
+  const iso = resolveIsolation({ isolation: { mode: 'docker' } });
+  assert.throws(() => assertJailCoherent({ isolation: iso, hasDrivePlan: true }), /drive/);
+});
+test('drive without docker, and docker without drive, both stay allowed', () => {
+  const none = resolveIsolation({});
+  const docker = resolveIsolation({ isolation: { mode: 'docker' } });
+  assert.doesNotThrow(() => assertJailCoherent({ isolation: none, hasDrivePlan: true }));
+  assert.doesNotThrow(() => assertJailCoherent({ isolation: docker, hasDrivePlan: false }));
+});
+
+// F4 (the other half). With docker missing the wrapped command exits 127, the hard `install`
+// check "fails", and tier1 short-circuits to INSUFFICIENT EVIDENCE -> `neutral` — which GitHub
+// counts as PASSING a Required check. So a runner that quietly loses docker turns the security
+// upgrade itself into the merge bypass, while the comment blames the PR. The preflight runs
+// ZERO PR code, so its failure is provably the runner's fault by construction rather than by
+// parsing exit codes out of untrusted output.
+atest('docker mode refuses to start when docker is unavailable', async () => {
+  const iso = resolveIsolation({ isolation: { mode: 'docker' } });
+  const missing = async () => ({ code: 127, combined: 'docker: command not found', timedOut: false });
+  await assert.rejects(() => preflightDocker({ isolation: iso, run: missing }), /docker/);
+  const daemonDown = async () => ({ code: 1, combined: 'Cannot connect to the Docker daemon', timedOut: false });
+  await assert.rejects(() => preflightDocker({ isolation: iso, run: daemonDown }), /docker/);
+});
+atest('the preflight never runs in mode none, and passes when docker answers', async () => {
+  let calls = 0;
+  const spy = async () => { calls += 1; return { code: 0, combined: 'Docker version 27.0.0', timedOut: false }; };
+  await preflightDocker({ isolation: resolveIsolation({}), run: spy });
+  assert.strictEqual(calls, 0, 'mode none must not shell out to docker at all');
+  await preflightDocker({ isolation: resolveIsolation({ isolation: { mode: 'docker' } }), run: spy });
+  assert.strictEqual(calls, 1);
 });
 
 console.log('trigger gate + self-error (Phase 2)');
