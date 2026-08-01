@@ -30,13 +30,17 @@
  *                             any other — every other blocking rule here would be
  *                             decorative. Relief valve is the override label, which
  *                             needs write access an attacker cannot self-grant.
- *   judge_error               head-INDUCIBLE, and deterministically so: criteria come
- *                             verbatim from the PR body (spec.js caps their length at
- *                             a MINIMUM of 3 chars, never a maximum) and judge.js
- *                             throws when criteria overhead alone exceeds the seat
- *                             budget. Blocking here is what makes inducing it a
- *                             self-DoS instead of a laundering route out of a
- *                             blocking cause into a passing one.
+ *   judge_error               head-INDUCIBLE, and deterministically so: criteria are read
+ *                             verbatim from PR-authored text (spec.js caps their length at
+ *                             a MINIMUM of 3 chars, never a maximum) and judge.js throws
+ *                             when criteria overhead alone exceeds the seat budget. It
+ *                             takes the PR body PLUS at least one linked issue: the body
+ *                             alone is capped by GitHub at 65,536 chars and lands ~37%
+ *                             short of the smallest seat budget, so buildSpec's
+ *                             concatenation of linked issues is the actual lever. Measured
+ *                             in scripts/probe-judge-error-induction.js. Blocking here is
+ *                             what makes inducing it a self-DoS instead of a laundering
+ *                             route out of a blocking cause into a passing one.
  *   judge_unconfigured        the ONLY one no head content can reach: it is Felix's
  *                             own process env, behind the sandbox's clean env and the
  *                             module lock. The adopter forgot a key; the PR is

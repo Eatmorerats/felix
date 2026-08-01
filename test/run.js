@@ -1373,11 +1373,13 @@ test('the attribution table: four attacker-reachable causes and the residual blo
 });
 
 // The laundering receipt. A PR can DETERMINISTICALLY induce judge_error: acceptance
-// criteria are read verbatim from the attacker-written PR body (spec.js enforces a
-// minimum length, never a maximum) and judge.js throws when criteria overhead alone
-// exceeds the seat budget. If judge_error were exempt, that throw would be a free
-// bypass out of a blocking cause into a passing one. It blocks, so inducing it is
-// self-DoS instead.
+// criteria are read verbatim from attacker-written text (spec.js enforces a minimum
+// length, never a maximum) and judge.js throws when criteria overhead alone exceeds
+// the seat budget. The text is the PR body PLUS its linked issues, and it takes both:
+// scripts/probe-judge-error-induction.js measures a body filled to GitHub's own 65,536
+// cap landing ~37% short, and one linked issue clearing it. If judge_error were exempt,
+// that throw would be a free bypass out of a blocking cause into a passing one. It
+// blocks, so inducing it is self-DoS instead.
 test('laundering: an INDUCED judge error still blocks — it is not an escape hatch', () => {
   const g = gatedInsufficient();
   const v = compose({

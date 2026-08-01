@@ -124,3 +124,11 @@ jobs:
       # than only as a green tick.
       - name: probe — INSUFFICIENT EVIDENCE bypass lanes
         run: node scripts/probe-insufficient-bypass.js
+
+      # Same job because it defends the same claim from the other side: the lane above says
+      # judge_error must BLOCK, this one measures how a PR actually reaches it. The docs said
+      # "a large PR body" until this was measured — the body is capped by GitHub at 65,536
+      # chars and falls short; it takes the linked issues buildSpec concatenates. That
+      # distinction decides where a future cap has to go, so it gets a regression guard.
+      - name: probe — how a PR induces judge_error
+        run: node scripts/probe-judge-error-induction.js

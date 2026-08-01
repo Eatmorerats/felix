@@ -50,7 +50,7 @@ const LANES = [
   },
   {
     id: CAUSES.JUDGE_ERROR,
-    label: 'PR induces a judge error      (oversized criteria block)',
+    label: 'PR induces a judge error  (body + linked-issue criteria)',
     args: {
       triage: {}, spec: realSpec, tier1: goodTier1, tier3: null,
       judgeStatus: { configured: true, error: 'Judge prompt overhead (48211 chars) alone exceeds the 30000 budget' },

@@ -205,7 +205,7 @@ the contributor fix it":
 | `install_failed` | ✅ yes — `"preinstall": "exit 1"` | 🔒 blocks |
 | `no_spec` | ✅ yes — and cheapest of all: write no acceptance criteria | 🔒 blocks |
 | `fork` | ✅ yes — *selectable*: open the PR from a fork and the judge is skipped | 🔒 blocks |
-| `judge_error` | ✅ yes — criteria come from the PR body and can be sized to break the judge | 🔒 blocks |
+| `judge_error` | ✅ yes — criteria come from the PR body **plus its linked issues**, and can be sized to break the judge | 🔒 blocks |
 | `judge_unconfigured` | ❌ no — it is your own missing key | 🔓 exempt |
 | `judge_unavailable_unknown` | ⚠️ residual — the judge returned nothing and recorded no reason | 🔒 blocks |
 
