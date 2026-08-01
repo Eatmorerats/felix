@@ -41,6 +41,7 @@
 // a require() in its body is a node_modules walk over directories the PR could write to —
 // the load the module lock exists to refuse. Both are unconditional here anyway.
 const picomatch = require('picomatch');
+const { buildCleanEnv } = require('./util/env');
 const { logger } = require('./util/logger');
 
 const DEFAULT_DEPS_TIMEOUT_MS = 120000;
@@ -485,9 +486,16 @@ async function runDepsCheck({ repoPath, baseSha, headSha, filesAll, config, run,
   let baseAdded = false;
   let headAdded = false;
 
+  // THE reachable instance of the post-checkout leak (see util/env.js). This runs INSIDE the
+  // sandbox flow, i.e. AFTER the PR's own install/build/test have executed — so by the time we
+  // get here the untrusted step has had its chance to write `<repoPath>/.git/hooks/post-checkout`,
+  // and `git worktree add` is what runs it. Without an explicit env, util/exec hands that hook
+  // GITHUB_TOKEN and every judge key. Cruising needs no credentials, so both calls take the
+  // clean env.
+  const cleanEnv = buildCleanEnv();
   const addWorktree = async (dir, sha) => {
-    await runFn(`git worktree remove --force "${dir}" || true`, { cwd: repoPath, timeoutMs: 60000 });
-    const add = await runFn(`git worktree add --detach --force "${dir}" ${sha}`, { cwd: repoPath, timeoutMs: cap });
+    await runFn(`git worktree remove --force "${dir}" || true`, { cwd: repoPath, env: cleanEnv, timeoutMs: 60000 });
+    const add = await runFn(`git worktree add --detach --force "${dir}" ${sha}`, { cwd: repoPath, env: cleanEnv, timeoutMs: cap });
     return Boolean(add && add.code === 0);
   };
 
@@ -552,11 +560,11 @@ async function runDepsCheck({ repoPath, baseSha, headSha, filesAll, config, run,
     return buildDepsRow({ candidates, suppressed, preExisting, couplingLines });
   } finally {
     if (headAdded) {
-      try { await runFn(`git worktree remove --force "${worktreeHead}"`, { cwd: repoPath, timeoutMs: 60000 }); }
+      try { await runFn(`git worktree remove --force "${worktreeHead}"`, { cwd: repoPath, env: cleanEnv, timeoutMs: 60000 }); }
       catch (e) { logger.warn(`deps head worktree teardown: ${e.message}`); }
     }
     if (baseAdded) {
-      try { await runFn(`git worktree remove --force "${worktreeBase}"`, { cwd: repoPath, timeoutMs: 60000 }); }
+      try { await runFn(`git worktree remove --force "${worktreeBase}"`, { cwd: repoPath, env: cleanEnv, timeoutMs: 60000 }); }
       catch (e) { logger.warn(`deps base worktree teardown: ${e.message}`); }
     }
     cleanupScratch();

@@ -213,7 +213,7 @@ async function build() {
   ]);
   const g3verdict = (i) => (i === 0 ? 'met' : i === 2 ? 'violated' : 'not_shown');
   g.G3_chunked_precedence_pacing = await runScenario({
-    env: { OPENAI_API_KEY: 'sk', FELIX_JUDGE_MAX_PROMPT_TOKENS: '1000' },
+    env: { OPENAI_API_KEY: 'sk', FELIX_JUDGE_MAX_PROMPT_TOKENS: '1335' },
     input: { prTitle: 'big', criteria: [{ text: 'c' }], diff: G3_DIFF, tier1: [] },
     scripts: {
       openai: (i) => oai({ assessment: `part ${i + 1}`, criteria: [{ text: 'c', verdict: g3verdict(i), reason: 'r' }] }),
@@ -224,16 +224,23 @@ async function build() {
   //      wider than the single-digit header the mutation would print. File sizes sit a packing
   //      boundary inside that window, so S3 shifts chunk boundaries. chunk.index/total appears
   //      TWICE in the chunked prompt (the PART header and the "UNIFIED DIFF (part i of n)" line),
-  //      so "10" vs a single digit moves overhead by 4 chars → budgetChars 1344 (index:10) vs
-  //      1348 (index:2). File size 672 puts a 2-file pack at cumulative 1346 — fits at 1348 (S3),
-  //      flushes at 1344 (correct) → 4 chunks vs 8. RETUNED from 675 after S3 stayed green; the
-  //      mutation below PROVES it discriminates, arithmetic alone did not.
+  //      so "10" vs a single digit moves overhead by 4 chars → budgetChars 1345 (index:10) vs
+  //      1349 (index:4, the count S3 would print here). File size 672 puts a 2-file pack at
+  //      cumulative 1346 — fits at 1349 (S3), flushes at 1345 (correct) → 4 chunks vs 8.
+  //
+  //      THE BUDGET IS PART OF THE TUNING, NOT A ROUND NUMBER. It was 1000 until the F11 fence
+  //      added ~1366 chars of prompt overhead, which drove budgetChars to 209 — small enough that
+  //      every file truncated identically on both sides, S3 went GREEN, and a routine `--update`
+  //      would have silently deleted this detector. 1335 is the ONLY budget that restores the
+  //      8-vs-4 split at file size 672, and it also holds G3/G12 at 5 chunks and G4 at 6 chunks +
+  //      7 omitted. Re-solve the pair, don't nudge it, if prompt overhead moves again. The
+  //      mutation below PROVES it discriminates; arithmetic alone did not, twice now.
   const G3B_DIFF = multiDiff([
     ['src/a0.js', 672], ['src/a1.js', 672], ['src/a2.js', 672], ['src/a3.js', 672],
     ['src/a4.js', 672], ['src/a5.js', 672], ['src/a6.js', 672], ['src/a7.js', 672],
   ]);
   g.G3b_maxchunks_boundary = await runScenario({
-    env: { OPENAI_API_KEY: 'sk', FELIX_JUDGE_MAX_PROMPT_TOKENS: '1000', FELIX_JUDGE_MAX_CHUNKS: '10' },
+    env: { OPENAI_API_KEY: 'sk', FELIX_JUDGE_MAX_PROMPT_TOKENS: '1335', FELIX_JUDGE_MAX_CHUNKS: '10' },
     input: { prTitle: 'boundary', criteria: [{ text: 'c' }], diff: G3B_DIFF, tier1: [] },
     scripts: { openai: (i) => oai({ assessment: `p${i + 1}`, criteria: [{ text: 'c', verdict: 'not_shown' }] }) },
   });
@@ -247,7 +254,7 @@ async function build() {
     ['src/g8.js', 1300], ['src/g9.js', 1300], ['src/g10.js', 1300], ['src/g11.js', 1300],
   ]);
   g.G4_chunked_omitted_and_truncated = await runScenario({
-    env: { OPENAI_API_KEY: 'sk', FELIX_JUDGE_MAX_PROMPT_TOKENS: '1000' },
+    env: { OPENAI_API_KEY: 'sk', FELIX_JUDGE_MAX_PROMPT_TOKENS: '1335' },
     input: { prTitle: 'huge', criteria: [{ text: 'c' }], diff: G4_DIFF, tier1: [] },
     scripts: { openai: () => oai({ assessment: 'seen', criteria: [{ text: 'c', verdict: 'not_shown' }] }) },
   });
@@ -339,7 +346,7 @@ async function build() {
   // G12 — chunked run where the model ignores the 3-valued schema and replies boolean met:false
   //      → mapped to not_shown, criterion fails with the "No part of the diff showed evidence" reason.
   g.G12_boolean_false_as_not_shown = await runScenario({
-    env: { OPENAI_API_KEY: 'sk', FELIX_JUDGE_MAX_PROMPT_TOKENS: '1000' },
+    env: { OPENAI_API_KEY: 'sk', FELIX_JUDGE_MAX_PROMPT_TOKENS: '1335' },
     input: { prTitle: 'bool', criteria: [{ text: 'c' }], diff: G3_DIFF, tier1: [] },
     scripts: { openai: (i) => oai({ assessment: `p${i + 1}`, criteria: [{ text: 'c', met: false, reason: 'r' }] }) },
   });

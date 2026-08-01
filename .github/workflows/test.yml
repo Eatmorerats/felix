@@ -64,3 +64,28 @@ jobs:
         run: npm ci
       - name: probe the docker jail with a real install
         run: node scripts/probe-docker-jail.js
+
+  # Same shape, different claim. The unit suite can only prove that buildCleanEnv() is CALLED.
+  # Whether a real `git worktree add` runs a real post-checkout hook, and whether that hook
+  # really inherits the parent's environment, is a claim about git — so it gets checked against
+  # git, with a control that must fail before the fix. See scripts/probe-hook-env-leak.js.
+  hook-env-leak:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # No `npm ci`: the probe imports only util/exec and util/env, both dependency-free. Keeps
+      # the job honest about what it is exercising, and fast.
+      #
+      # GITHUB_TOKEN is exported ON PURPOSE. A runner does not put it in the process environment
+      # by default, so without this the probe's "no secret-shaped name reached the hook" check
+      # runs against ONE name — the fake one it planted itself — and proves almost nothing. With
+      # it, the allowlist is checked against a real credential of the exact kind Felix carries.
+      # The probe prints names, never values, and only names that SURVIVED (none, when the fix
+      # holds).
+      - name: probe — post-checkout hook environment
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/probe-hook-env-leak.js
