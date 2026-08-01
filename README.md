@@ -311,10 +311,45 @@ Felix runs untrusted PR scripts. Phase 1 mitigations: hand-run on trusted repos,
 no secrets injected into the sandbox, hard per-command timeouts with process-group
 kill. Stronger isolation (container/VM, egress limits) is a later phase.
 
+### Untrusted content in the judge prompt
+
+Everything variable in a judge prompt is attacker-controlled: the PR title and acceptance
+criteria come from a PR body anyone can write, the diff is the submission itself, and a failing
+Tier 1 check contributes up to 4 KB of **the PR's own stdout**. So each of those is wrapped in
+marker lines carrying a fixed boundary token, and the token is **stripped from the content
+before it is wrapped** — content that cannot contain the token cannot close its own fence. The
+section headings around the blocks stay unfenced, so the judge can always tell operator
+structure from submitted data, and the response schema is the last thing it reads.
+
+This matters most on the cheapest channel, not the obvious one. `lint`, `typecheck`, `crap` and
+`deps` are all `hard:false` — failing one costs a PR nothing — so a PR gets a free, deterministic
+write into the judge's context, positioned *above* the diff, simply by making its own linter
+print something.
+
+### What the sandbox and the deps check pass to git
+
+`git worktree add` performs a checkout, and a checkout runs the repository's `post-checkout`
+hook. Both `sandbox.js` and `deps.js` call it, and both now pass an **allowlisted, secret-free
+environment** (`src/engine/util/env.js`) rather than inheriting Felix's — which holds
+`GITHUB_TOKEN` and every judge key.
+
+Hooks are neither tracked by git nor transferred by clone, so a PR cannot ship one; Felix's own
+ordering is what supplies the write. The sandbox is created, **then** the PR's install/build/test
+runs with write access to the parent clone's `.git`, **then** the deps check calls
+`git worktree add` twice more. `scripts/probe-hook-env-leak.js` reproduces the leak against real
+git and fails loudly if its own pre-fix control stops leaking.
+
+The two `git fetch` calls deliberately keep the parent environment: they are the only networked
+git calls, credentials ride in the environment on some setups, and fetch runs no checkout hook.
+
+Not closed by this: `actions/checkout` defaults to `persist-credentials: true`, which leaves a
+usable `GITHUB_TOKEN` in `.git/config` where the untrusted step can simply read it. Cleaning the
+environment does not touch that — it needs a workflow change.
+
 ## Tests
 
 ```bash
-npm test        # 191 offline unit tests, no network
+npm test        # 256 offline unit tests + 23 golden judge cases, no network
 npm run test:crap   # end-to-end: real c8 + escomplex prove the CRAP criteria
 npm run test:live   # end-to-end: drives a real browser against a real app (needs Playwright)
 ```
