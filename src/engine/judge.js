@@ -13,15 +13,16 @@
  *
  * This file now ORCHESTRATES a judge run — seat selection, budget planning, the
  * bounded retry, multi-chunk pacing, and the jury fan-out — and RE-EXPORTS the
- * public surface. The pieces it drives live in three leaf modules that import
- * nothing from the engine (no cycles):
- *   ./prompt    — buildPrompt (the exact prompt string matrix)
- *   ./providers — PROVIDERS registry + httpError (the vendor REST contracts)
- *   ./merge     — chunk/jury merges + coverage description
+ * public surface. The pieces it drives live in three modules (no cycles):
+ *   ./prompt    — buildPrompt (the exact prompt string matrix). Reads ./budget and
+ *                 ./providers for the untrusted-region caps; both are leaves, so the
+ *                 graph stays acyclic.
+ *   ./providers — PROVIDERS registry + httpError (the vendor REST contracts). A leaf.
+ *   ./merge     — chunk/jury merges + coverage description. A leaf.
  */
 
 const { logger } = require('./util/logger');
-const { estimateTokens, planJudgeCalls, paceMs, DEFAULT_MAX_CHUNKS } = require('./budget');
+const { estimateTokens, planJudgeCalls, paceMs, promptBudgetTokens, DEFAULT_MAX_CHUNKS } = require('./budget');
 const { buildPrompt } = require('./prompt');
 const { PROVIDERS } = require('./providers');
 const {
@@ -121,6 +122,12 @@ function createJudge(env = process.env, { adversarial = false, fetchImpl, sleepI
     ? Number(env.FELIX_JUDGE_MAX_PROMPT_TOKENS)
     : null;
 
+  // The budget the UNTRUSTED prompt regions are sized against — one value for every seat, not
+  // each seat's own. A jury only means something if its vendors graded the same evidence, so a
+  // 200K-token Gemini seat must not be shown more of a PR's Tier 1 output than the 30K OpenAI
+  // seat sitting beside it. Same value index.js caps the criteria with, so the two agree.
+  const regionBudgetTokens = promptBudgetTokens(env, PROVIDERS);
+
   const seats = families.map((family, i) => {
     const rawProvider = PROVIDERS[family];
     const model = models[i] || (rawProvider && rawProvider.defaultModel) || '';
@@ -193,7 +200,9 @@ function createJudge(env = process.env, { adversarial = false, fetchImpl, sleepI
     // against a 60K-token estimate and ignored the instructions, criteria and Tier 1 output
     // riding along with it — the live 429 billed 61,227 tokens for a request the cap thought
     // was exactly at budget. Measuring the real prompt minus its diff removes the guesswork.
-    let overheadChars = buildPrompt({ ...input, diff: '', adversarial }).length;
+    let overheadChars = buildPrompt({
+      ...input, diff: '', adversarial, maxPromptTokens: regionBudgetTokens,
+    }).length;
     let plan = planJudgeCalls({
       diff: input.diff,
       overheadChars,
@@ -210,7 +219,8 @@ function createJudge(env = process.env, { adversarial = false, fetchImpl, sleepI
     // overhead, sized with the widest part header we could ever print (maxChunks/maxChunks).
     if (!plan.singlePass && plan.chunks.length) {
       const chunkedOverhead = buildPrompt({
-        ...input, diff: '', adversarial, chunk: { index: maxChunks, total: maxChunks },
+        ...input, diff: '', adversarial, maxPromptTokens: regionBudgetTokens,
+        chunk: { index: maxChunks, total: maxChunks },
       }).length;
       if (chunkedOverhead > overheadChars) {
         overheadChars = chunkedOverhead;
@@ -237,6 +247,7 @@ function createJudge(env = process.env, { adversarial = false, fetchImpl, sleepI
         ...input,
         diff: plan.chunks[i].text,
         adversarial,
+        maxPromptTokens: regionBudgetTokens,
         chunk: { index: i + 1, total: plan.chunks.length },
       });
       // Pace against the seat's per-minute ceiling BEFORE spending, not after failing. Chunks

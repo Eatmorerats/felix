@@ -30,22 +30,36 @@
  *                             any other — every other blocking rule here would be
  *                             decorative. Relief valve is the override label, which
  *                             needs write access an attacker cannot self-grant.
- *   judge_error               head-INDUCIBLE, and deterministically so: criteria are read
- *                             verbatim from PR-authored text (spec.js caps their length at
- *                             a MINIMUM of 3 chars, never a maximum) and judge.js throws
- *                             when criteria overhead alone exceeds the seat budget. It
- *                             takes the PR body PLUS at least one linked issue: the body
- *                             alone is capped by GitHub at 65,536 chars and lands ~37%
- *                             short of the smallest seat budget, so buildSpec's
- *                             concatenation of linked issues is the actual lever. Measured
- *                             in scripts/probe-judge-error-induction.js. Blocking here is
+ *   judge_error               head-INDUCIBLE, and blocking for that reason — blocking is
  *                             what makes inducing it a self-DoS instead of a laundering
- *                             route out of a blocking cause into a passing one.
+ *                             route out of a blocking cause into a passing one. The two
+ *                             cheapest levers are now closed rather than merely blocked:
+ *                             oversized criteria are refused up front by `spec_too_large`
+ *                             below, and the Tier 1 evidence regions are truncated at the
+ *                             budget in prompt.js. What is NOT closed: CHARS_PER_TOKEN is
+ *                             an English/code approximation, so ~40,000 chars of CJK
+ *                             estimate as 10,000 tokens and bill roughly 40,000 — the
+ *                             prompt passes the local budget check and the vendor refuses
+ *                             it. Still DoS-only, since this cause blocks either way.
  *   judge_unconfigured        the ONLY one no head content can reach: it is Felix's
  *                             own process env, behind the sandbox's clean env and the
  *                             module lock. The adopter forgot a key; the PR is
  *                             innocent. This is the one safe exemption.
  *   judge_unavailable_unknown the residual. See the guard note at the tier3 branch.
+ *
+ * `spec_too_large` is deliberately NOT one of them — it is NOT VERIFIED, and it is the only
+ * cause on this page that is 100% author-controlled AND 100% author-fixable. Two consequences,
+ * both intended:
+ *
+ *   - `failure`, not `neutral`. Gating is OFF by default, so a new INSUFFICIENT cause is GREEN
+ *     in the majority adopter configuration. Shipping a deterministically PR-inducible state
+ *     that passes a Required check would manufacture the exact lane this change closes.
+ *   - it is absent from INSUFFICIENT_CAUSES, which is what gating.js validates
+ *     `insufficientExempt` against. So an adopter cannot write it into their exemption list —
+ *     assertKnown throws and names the valid values. That is the point: nobody should be able
+ *     to configure "a PR that makes itself unverifiable passes my gate". Listing it there
+ *     would also create config that reads as a gate and can never fire, since gateDecision
+ *     only consults the exemption list for INSUFFICIENT EVIDENCE.
  */
 
 const VERDICTS = {
@@ -64,6 +78,7 @@ const CAUSES = {
   NON_BEHAVIORAL: 'non_behavioral',
   INSTALL_FAILED: 'install_failed',
   NO_SPEC: 'no_spec',
+  SPEC_TOO_LARGE: 'spec_too_large',
   CRITERIA_UNMET: 'criteria_unmet',
   FORK: 'fork',
   JUDGE_ERROR: 'judge_error',
@@ -101,6 +116,34 @@ function compose({ triage, spec, tier1, tier3, installFailed, judgeStatus, trigg
   if (installFailed) {
     required.push('Fix install/build so the PR can be exercised.');
     return { verdict: VERDICTS.INSUFFICIENT, cause: CAUSES.INSTALL_FAILED, required_to_pass: required, reason: 'install/build failed' };
+  }
+  // 2b. There IS a spec, and it is too large to put in front of a judge.
+  //
+  // Ordered BEFORE the !hadRealSpec branch, and that is a decision rather than line-order
+  // accident. Today the two cannot both be true: an over-limit spec always has
+  // hadRealSpec === true, and the only way hadRealSpec goes false with criteria present is the
+  // PR-title fallback, which GitHub caps at 256 chars and so can never overflow. It is ordered
+  // this way for the fourth spec source nobody has written yet (commit messages, review
+  // comments), which could be both oversized AND fallback-only — the redder branch first means
+  // such a source cannot silently downgrade this `failure` into a `neutral`.
+  //
+  // Ordered AFTER installFailed, which is the opposite trade and also deliberate: ordering
+  // cannot open or close a lane here (an attacker who wants the neutral just breaks their own
+  // install with an ordinary spec — a lane already documented as head-controlled above), so
+  // the tie goes to diagnostics, and a broken install is what the author hits first.
+  if (spec && spec.size && spec.size.overLimit) {
+    return {
+      verdict: VERDICTS.NOT_VERIFIED,
+      cause: CAUSES.SPEC_TOO_LARGE,
+      required_to_pass: [
+        `Acceptance criteria are too large to verify: ${spec.total} criteria, ` +
+        `${spec.size.renderedChars} characters, against a limit of ${spec.size.limitChars}. ` +
+        'Felix will not grade a subset — that would report a verdict on criteria it never read. ' +
+        'Reduce the criteria, or split this PR so each part carries its own spec.' +
+        (spec.source ? ` Sources: ${spec.source}.` : ''),
+      ],
+      reason: 'spec too large to verify',
+    };
   }
   if (!spec || !spec.hadRealSpec) {
     return {

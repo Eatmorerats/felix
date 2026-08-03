@@ -169,7 +169,11 @@ function scanSecrets({ cwd, files, secretsCfg, hard = true }) {
     status: findings.length ? 'fail' : 'pass',
     hard,
     detail: (findings.length ? `${findings.length} potential secret(s)` : 'no secrets in changed files') + deferred,
-    output: findings.join('\n'),
+    // Bounded like every command check's output. `findings` grows with changed files x matches
+    // per file, all of it PR-controlled, so unbounded it puts megabytes into the verdict log
+    // payload. The judge prompt is defended separately and authoritatively in prompt.js
+    // (clampRegion) — this is the belt to that suspenders, and it keeps log.js honest too.
+    output: tail(findings.join('\n'), 4000),
   };
 }
 
