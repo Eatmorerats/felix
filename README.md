@@ -175,11 +175,55 @@ depth) and `.github/workflows/**` are always treated as behavioural, whatever `s
 the base that everything above trusts. The practical effect: **dependency-bump PRs now get
 fully verified instead of skipped.** That is intended; a lockfile bump is behavioural.
 
-> **Marking the check Required?** Set `"gating": { "blockOn": ["NOT VERIFIED", "INSUFFICIENT
-> EVIDENCE"] }` in the base config. GitHub counts `neutral` and `skipped` as *passing*, and
-> INSUFFICIENT EVIDENCE maps to `neutral` — so with the default `blockOn` a PR with no
-> acceptance criteria, a broken install, or a fork PR (no judge secret) does not block. The
-> trust boundary makes the policy honest; it does not by itself make the gate hard.
+> **Marking the check Required?** Just turn gating on in the base config:
+>
+> ```json
+> "gating": { "enabled": true }
+> ```
+>
+> which resolves to `blockOn: ["NOT VERIFIED", "INSUFFICIENT EVIDENCE"]` and
+> `insufficientExempt: ["judge_unconfigured"]`.
+>
+> Insufficiency is in the default `blockOn` because GitHub counts `neutral` and `skipped`
+> as *passing*, and INSUFFICIENT EVIDENCE maps to `neutral` — so a gate that ignores it
+> lets a PR with no acceptance criteria, a broken install, or a fork PR merge unverified.
+> A gate that passes on "I could not verify this" is not a gate.
+>
+> **Gating is still off by default**, so this changes nothing for advisory adopters. To keep
+> the older, looser behaviour on a repo that already gates, write it out explicitly —
+> `"blockOn": ["NOT VERIFIED"]` — and an explicit value is always preserved verbatim.
+
+#### Why insufficiency is not one thing
+
+INSUFFICIENT EVIDENCE has several causes and they are not equally safe to let through.
+Every verdict carries a machine-readable `cause`, and `insufficientExempt` names the ones a
+gated repo will still pass on. The axis is **can head content reach this state**, not "can
+the contributor fix it":
+
+| cause | reachable from the PR? | default |
+| --- | --- | --- |
+| `install_failed` | ✅ yes — `"preinstall": "exit 1"` | 🔒 blocks |
+| `no_spec` | ✅ yes — and cheapest of all: write no acceptance criteria | 🔒 blocks |
+| `fork` | ✅ yes — *selectable*: open the PR from a fork and the judge is skipped | 🔒 blocks |
+| `judge_error` | ✅ yes — criteria come from the PR body **plus its linked issues**, and can be sized to break the judge | 🔒 blocks |
+| `judge_unconfigured` | ❌ no — it is your own missing key | 🔓 exempt |
+| `judge_unavailable_unknown` | ⚠️ residual — the judge returned nothing and recorded no reason | 🔒 blocks |
+
+`fork` blocks even though an outside contributor cannot un-fork their PR. That is
+deliberate: it is the cheapest bypass in the whole system, so leaving it open would make
+every other row decorative. The relief valve is the `overrideLabel`, which needs write
+access an outside contributor does not have. A fork-heavy project that accepts the trade
+can add `"fork"` to `insufficientExempt` — one reviewable line, in the base config.
+
+`insufficientExempt` is an **exemption** list rather than an inclusion list so that a cause
+added by a future Felix version blocks by default instead of silently passing. Unrecognized
+values in either array are a **hard config error** — previously a typo like
+`"INSUFFICENT EVIDENCE"` matched nothing and silently left the repo with no gate at all.
+
+`judge_unavailable_unknown` is that principle applied inside the engine: it is a live branch,
+not dead code, reached whenever the judge yields no result and none of the named reasons
+applies. It blocks, so a state nobody anticipated costs a red check and a bug report rather
+than a quiet green.
 
 ### Driving the app (opt-in)
 
