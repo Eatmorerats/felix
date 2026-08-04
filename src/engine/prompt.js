@@ -1,10 +1,15 @@
 /**
  * prompt.js — builds the judge's prompt string.
  *
- * Pure and dependency-free: given the PR title, criteria, diff, Tier 1 outputs and the two
- * mode flags (adversarial, chunk), it returns the exact text sent to the vendor. Both judge
- * families are held to the identical output schema produced here, so the shared parser in
- * judge.js can turn either vendor's raw JSON into the common verdict shape.
+ * Pure: given the PR title, criteria, diff, Tier 1 outputs and the two mode flags
+ * (adversarial, chunk), it returns the exact text sent to the vendor. Both judge families are
+ * held to the identical output schema produced here, so the shared parser in judge.js can turn
+ * either vendor's raw JSON into the common verdict shape.
+ *
+ * It reads two sibling LEAF modules — budget.js for the region caps and providers.js for the
+ * smallest seat they are derived from. Both import nothing, so the graph stays acyclic; the
+ * module is no longer dependency-free, and that is the price of bounding the untrusted regions
+ * at the one place the budget is actually measured (see clampRegion).
  *
  * ── THE FENCE (F11) ──────────────────────────────────────────────────────────────────────
  * Everything variable in this prompt is attacker-controlled. The PR title and the acceptance
@@ -34,6 +39,18 @@
  * the security comes from step (2), not from the token being secret. An attacker who knows the
  * token still cannot get one into the prompt.
  */
+
+const { regionCapChars, smallestSeatTokens } = require('./budget');
+const { PROVIDERS } = require('./providers');
+
+/**
+ * The seat every untrusted region is sized against when the caller does not say otherwise.
+ *
+ * A DEFAULT rather than a required argument, and the strictest seat rather than a permissive
+ * one, because the bound has to hold for callers that never think about it. An optional cap is
+ * a cap someone forgets; judge.js passes the env-adjusted value, everyone else gets this.
+ */
+const DEFAULT_PROMPT_BUDGET_TOKENS = smallestSeatTokens(PROVIDERS);
 
 /**
  * The boundary token. Long, high-entropy, and drawn from a deliberately narrow alphabet:
@@ -99,6 +116,47 @@ const FENCE_INSTRUCTIONS = [
 ];
 
 /**
+ * Render the acceptance criteria exactly as they will cost prompt budget.
+ *
+ * Shared with spec.js ON PURPOSE. The cap that decides `spec_too_large` measures THIS string,
+ * so if the two computed the numbering separately, a change to the format here would silently
+ * invalidate the cap and nothing would fail. The numbering is not decoration: at the 4-char
+ * minimum criterion, `${i+1}. ` plus the newline is 2.73x the criteria text itself (measured),
+ * which is why the cap counts rendered characters and not the sum of the texts. A text-only
+ * cap is defeated by many tiny criteria; a count-only cap is defeated by two enormous ones.
+ */
+function renderCriteriaList(criteria) {
+  return (criteria || []).map((c, i) => `${i + 1}. ${c.text}`).join('\n');
+}
+
+/**
+ * Bound one untrusted EVIDENCE region, saying so where the judge can read it.
+ *
+ * Tier 1 rows and failing-check stdout are produced by the PR's own code, and several
+ * producers are unbounded by construction: the secrets scan emits one line per finding, the
+ * deps check one per new cycle, the crap check one per skipped file, a browser flow one per
+ * console error the PR's own app prints. Any of them can outgrow the whole seat budget on a PR
+ * that wants it to, and that is a second lever into `judge_error` that a cap on the criteria
+ * alone would not close.
+ *
+ * Bounding them HERE rather than at each producer is deliberate. This is the single place the
+ * budget is measured, so it catches every producer including the ones not written yet — a
+ * producer-side fix is one new check module away from being incomplete again.
+ *
+ * Truncation is honest for evidence and dishonest for criteria; see PROMPT_REGION_FRACTIONS
+ * in budget.js for why the two overflow in opposite directions.
+ */
+function clampRegion(text, label, capChars) {
+  const s = String(text || '');
+  if (s.length <= capChars) return s;
+  const dropped = s.length - capChars;
+  return `${s.slice(0, capChars)}\n…(${label} truncated — ${dropped} of ${s.length} chars not shown)…`;
+}
+
+/**
+ * @param {number} [maxPromptTokens] The seat budget the untrusted regions are sized against.
+ *   Defaults to the strictest seat Felix ships; judge.js passes the env-adjusted value so a
+ *   repo that lowered FELIX_JUDGE_MAX_PROMPT_TOKENS gets caps that fit its real ceiling.
  * @param {{index:number,total:number}} [chunk] Set when the diff was too large for one
  *   call and is being judged in several passes. A judge seeing only PART of a diff must
  *   NOT report "not met" for something it simply cannot see — that false negative is
@@ -106,15 +164,30 @@ const FENCE_INSTRUCTIONS = [
  *   three-valued verdict and mergeChunkRulings reassembles it (see there for why the two
  *   directions merge differently).
  */
-function buildPrompt({ prTitle, criteria, diff, tier1, adversarial = false, chunk = null }) {
-  const criteriaList = criteria.map((c, i) => `${i + 1}. ${c.text}`).join('\n');
-  const checks = tier1
-    .map((c) => `- ${c.name}: ${c.status.toUpperCase()} (${c.detail})`)
-    .join('\n');
-  const tier1Output = tier1
-    .filter((c) => c.status === 'fail' && c.output)
-    .map((c) => `### ${c.name} output\n${c.output}`)
-    .join('\n\n');
+function buildPrompt({
+  prTitle, criteria, diff, tier1, adversarial = false, chunk = null,
+  maxPromptTokens = DEFAULT_PROMPT_BUDGET_TOKENS,
+}) {
+  // NOT clamped, deliberately. An over-sized criteria set never reaches this function: it is
+  // caught in buildSpec and blocks as `spec_too_large`, because grading a truncated spec and
+  // reporting the result as complete is the bypass this whole design exists to refuse.
+  const criteriaList = renderCriteriaList(criteria);
+  // The evidence regions ARE clamped, and after assembly rather than per row — a thousand
+  // small rows overrun the budget exactly as well as one huge row, and only the joined string
+  // knows what it really costs.
+  const checks = clampRegion(
+    tier1.map((c) => `- ${c.name}: ${c.status.toUpperCase()} (${c.detail})`).join('\n'),
+    'Tier 1 results',
+    regionCapChars('checks', maxPromptTokens)
+  );
+  const tier1Output = clampRegion(
+    tier1
+      .filter((c) => c.status === 'fail' && c.output)
+      .map((c) => `### ${c.name} output\n${c.output}`)
+      .join('\n\n'),
+    'failing check output',
+    regionCapChars('tier1Output', maxPromptTokens)
+  );
 
   // No truncation here any more. The caller (runSeat) sizes the diff against the seat's
   // rate limit before we ever get here, and splits it if it doesn't fit — so whatever
@@ -211,4 +284,8 @@ function buildPrompt({ prTitle, criteria, diff, tier1, adversarial = false, chun
   ].join('\n');
 }
 
-module.exports = { buildPrompt, FENCE_TOKEN, FENCE_STRIPPED, stripFence, fenceBlock };
+module.exports = {
+  buildPrompt, renderCriteriaList, clampRegion,
+  FENCE_TOKEN, FENCE_STRIPPED, stripFence, fenceBlock,
+  DEFAULT_PROMPT_BUDGET_TOKENS,
+};

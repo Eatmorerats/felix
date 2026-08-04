@@ -8,7 +8,24 @@
  *
  * Tier 2 = mapping each criterion to the changed files/tests so we can report
  * coverage (criteria_total vs criteria_mapped) and feed the judge.
+ *
+ * SIZE IS A SECURITY PROPERTY HERE, not housekeeping. Criteria are read verbatim out of text
+ * anyone can write, and index.js folds in up to TEN linked issues, each with its own
+ * 65,536-char GitHub body. Past a point the criteria alone outgrow the judge's whole prompt
+ * budget, judge.js throws, and the PR lands on `judge_error`. So buildSpec MEASURES the merged
+ * set and reports `size.overLimit`; verdict.js turns that into a blocking `spec_too_large`.
+ *
+ * Three things about that measurement are load-bearing:
+ *   - it is taken on the MERGED set, after the issues are folded in. A per-source cap measures
+ *     clean and defends nothing: eleven under-cap sources sum to over-budget.
+ *   - it counts the RENDERED string (prompt.js renderCriteriaList), not the sum of the texts.
+ *     The `${i+1}. ` numbering is 2.73x the text itself at the minimum criterion width.
+ *   - nothing here truncates. Grading a subset of a spec and reporting it as complete is a
+ *     bypass primitive, not a degradation — see PROMPT_REGION_FRACTIONS in budget.js.
  */
+
+const { renderCriteriaList, DEFAULT_PROMPT_BUDGET_TOKENS } = require('./prompt');
+const { regionCapChars } = require('./budget');
 
 const ISSUE_REF = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[:\s]+#(\d+)|(?:^|\s)#(\d+)\b/gi;
 
@@ -49,6 +66,9 @@ function extractCriteria(text = '') {
       // checkbox items anywhere (they almost always express requirements).
       const isCheckbox = /^[-*]\s+\[[ xX]\]/.test(line);
       if ((sawAnyHeading && inSection) || (!sawAnyHeading && isCheckbox)) {
+        // A MINIMUM of 4 characters, and there is deliberately no maximum here — a single
+        // source cannot know what the merged set costs. The maximum is enforced once, on the
+        // merged set, in buildSpec.
         if (txt.length > 3) out.push(txt);
       }
     }
@@ -86,13 +106,20 @@ function mapCriterion(criterion, files) {
   return hits;
 }
 
+/** The merged-criteria cap, in rendered characters, for a given seat budget. */
+function criteriaCapChars(maxPromptTokens = DEFAULT_PROMPT_BUDGET_TOKENS) {
+  return regionCapChars('criteria', maxPromptTokens);
+}
+
 /**
  * Build the spec model.
  * @param {object} pr  PR object (needs .title, .body)
  * @param {Array}  issues  fetched linked-issue objects ({number, title, body})
  * @param {Array}  files  changed files ({filename, ...})
+ * @param {{maxCriteriaChars?: number}} [opts]  cap on the RENDERED merged criteria set.
+ *   Defaults to the strictest seat Felix ships; index.js passes the env-adjusted value.
  */
-function buildSpec(pr, issues, files) {
+function buildSpec(pr, issues, files, { maxCriteriaChars = criteriaCapChars() } = {}) {
   const sources = [];
   let criteria = [];
 
@@ -121,13 +148,24 @@ function buildSpec(pr, issues, files) {
 
   const hadRealSpec = sources.length > 0 && !(sources.length === 1 && sources[0].includes('fallback'));
 
+  // Measured on `mapped` — the very array index.js hands to the judge — and through the same
+  // renderer buildPrompt uses, so this is the real cost and not an estimate of it.
+  const renderedChars = renderCriteriaList(mapped).length;
+
   return {
     source: sources.length ? sources.join(', ') : null,
     hadRealSpec,
     criteria: mapped,
     total: mapped.length,
     mappedCount: mapped.filter((c) => c.mapped).length,
+    size: {
+      renderedChars,
+      limitChars: maxCriteriaChars,
+      overLimit: renderedChars > maxCriteriaChars,
+    },
   };
 }
 
-module.exports = { buildSpec, extractCriteria, linkedIssueNumbers, mapCriterion, keywords };
+module.exports = {
+  buildSpec, extractCriteria, linkedIssueNumbers, mapCriterion, keywords, criteriaCapChars,
+};

@@ -38,6 +38,47 @@ const SAFETY_FACTOR = 0.85;
 // the shortfall instead of letting one enormous PR run for ten minutes.
 const DEFAULT_MAX_CHUNKS = 6;
 
+/**
+ * How the smallest seat's prompt budget is divided among the regions that are NOT diff.
+ *
+ * EVERY region below is written by the pull request under review: the criteria come from its
+ * body and the issues it links, `checks` carries its changed-file paths, and `tier1Output` is
+ * the stdout of its own code. Left unbounded, any ONE of them pushes prompt overhead past the
+ * seat budget by itself — which throws in runSeat and lands the PR on `judge_error`. Measured:
+ * a PR body filled to GitHub's 65,536-char cap falls ~37% short alone, but folding in one
+ * linked issue clears it (scripts/probe-judge-error-induction.js).
+ *
+ * Fractions of the smallest seat rather than absolute numbers, so the relationship survives an
+ * edit to SAFETY_FACTOR, CHARS_PER_TOKEN, or any provider's ceiling. The suite pins the
+ * relationship, not the numbers.
+ *
+ * THE TWO KINDS OF OVERFLOW ARE NOT HANDLED THE SAME WAY, and that asymmetry is the design:
+ *
+ *   criteria    are the QUESTION being asked. Dropping some grades a subset and reports the
+ *               result as complete — which is not a degradation but a BYPASS PRIMITIVE: an
+ *               author pushes the one criterion their code violates past the cutoff and
+ *               collects VERIFIED on the survivors. So overflow BLOCKS, loudly, and Felix
+ *               grades nothing (verdict.js `spec_too_large`).
+ *   tier1Output is EVIDENCE, and so is `checks`. Showing less of it is an honest degradation
+ *               so long as the judge can see that it happened — so overflow TRUNCATES with a
+ *               visible marker, the same contract packChunks uses for an oversized file.
+ */
+const PROMPT_REGION_FRACTIONS = Object.freeze({
+  criteria: 0.40,
+  tier1Output: 0.15,
+  checks: 0.05,
+});
+
+/**
+ * What must survive for the diff once every non-diff region sits at its cap.
+ *
+ * Not enforced at runtime — it is the invariant the suite pins, so raising a fraction above
+ * fails a test instead of quietly starving the judge of the code it exists to read. A judge
+ * shown no diff does not report "I saw nothing"; it reports criteria as NOT met, which is
+ * indistinguishable from a real finding.
+ */
+const DIFF_FLOOR_FRACTION = 0.30;
+
 /** Estimated token count for a string. Deliberately conservative — see CHARS_PER_TOKEN. */
 function estimateTokens(text) {
   return Math.ceil(String(text || '').length / CHARS_PER_TOKEN);
@@ -221,7 +262,53 @@ function paceMs(tokensJustSpent, tpm) {
   return Math.max(0, Math.ceil((tokensJustSpent / tpm) * 60_000));
 }
 
+/** Characters a seat may actually spend on a prompt, after the safety factor. */
+function seatBudgetChars(maxPromptTokens) {
+  return tokensToChars(Math.floor(Number(maxPromptTokens) * SAFETY_FACTOR));
+}
+
+/** The cap for one non-diff prompt region, in characters. See PROMPT_REGION_FRACTIONS. */
+function regionCapChars(region, maxPromptTokens) {
+  const fraction = PROMPT_REGION_FRACTIONS[region];
+  if (!fraction) {
+    throw new Error(
+      `Unknown prompt region "${region}". Known regions: ${Object.keys(PROMPT_REGION_FRACTIONS).join(', ')}.`
+    );
+  }
+  return Math.floor(seatBudgetChars(maxPromptTokens) * fraction);
+}
+
+/** The smallest maxPromptTokens any shipped provider declares — the easiest one to overrun. */
+function smallestSeatTokens(providers) {
+  const budgets = Object.values(providers || {})
+    .map((p) => p && p.maxPromptTokens)
+    .filter(Boolean);
+  if (!budgets.length) throw new Error('No judge provider declares a maxPromptTokens budget.');
+  return Math.min(...budgets);
+}
+
+/**
+ * The one token budget every PR-authored region is sized against.
+ *
+ * Deliberately the REGISTRY minimum, not the seated one. Which vendor keys a repo happens to
+ * hold must not decide whether a PR is verifiable — otherwise the same PR is gradeable in one
+ * repo and blocked in another for a reason its author cannot see, and a repo that adds a
+ * second key silently changes its own verdicts. Take the strictest seat Felix ships and hold
+ * everyone to it.
+ *
+ * FELIX_JUDGE_MAX_PROMPT_TOKENS is honored because it lowers EVERY seat (judge.js applies it
+ * across the board), so a repo on a small rate-limit tier gets caps that fit its real ceiling
+ * instead of caps sized for a seat it does not have — which would defend nothing.
+ */
+function promptBudgetTokens(env, providers) {
+  const override = Number((env || {}).FELIX_JUDGE_MAX_PROMPT_TOKENS);
+  if (override > 0) return override;
+  return smallestSeatTokens(providers);
+}
+
 module.exports = {
   estimateTokens, tokensToChars, splitDiffByFile, packChunks, planJudgeCalls, paceMs,
+  seatBudgetChars, regionCapChars, smallestSeatTokens, promptBudgetTokens,
   CHARS_PER_TOKEN, SAFETY_FACTOR, DEFAULT_MAX_CHUNKS,
+  PROMPT_REGION_FRACTIONS, DIFF_FLOOR_FRACTION,
 };

@@ -12,7 +12,9 @@ const { version } = require('../../package.json');
 const { logger } = require('./util/logger');
 const { createGitHub, parseTarget } = require('./github');
 const { loadConfig, resolveWorkdir, CONFIG_FILENAME } = require('./config');
-const { buildSpec, linkedIssueNumbers } = require('./spec');
+const { buildSpec, linkedIssueNumbers, criteriaCapChars } = require('./spec');
+const { promptBudgetTokens } = require('./budget');
+const { PROVIDERS } = require('./providers');
 const { createSandbox } = require('./sandbox');
 const { runTier1 } = require('./tier1');
 const { resolveIsolation, assertJailCoherent, preflightDocker } = require('./isolation');
@@ -207,8 +209,19 @@ async function run(opts) {
     const issue = await gh.getIssue(owner, repo, n);
     if (issue && !issue.pull_request) issues.push(issue);
   }
-  const spec = buildSpec(pr, issues, triage.behavioral);
-  logger.info(`spec: ${spec.source || 'none'} (${spec.total} criteria)`);
+  // The cap is sized against the strictest seat Felix ships, lowered further if this repo set
+  // FELIX_JUDGE_MAX_PROMPT_TOKENS — never against the seats this repo happens to have keyed, so
+  // adding a second vendor key cannot silently change whether a PR is gradeable.
+  const spec = buildSpec(pr, issues, triage.behavioral, {
+    maxCriteriaChars: criteriaCapChars(promptBudgetTokens(env, PROVIDERS)),
+  });
+  logger.info(`spec: ${spec.source || 'none'} (${spec.total} criteria, ${spec.size.renderedChars} chars)`);
+  if (spec.size.overLimit) {
+    logger.warn(
+      `spec too large: ${spec.size.renderedChars} rendered chars exceeds the ${spec.size.limitChars}-char ` +
+      'limit — the judge is skipped and the verdict blocks (spec_too_large).'
+    );
+  }
 
   // (5) Sandbox.
   logger.step(5, 'preparing sandbox');
@@ -251,7 +264,13 @@ async function run(opts) {
     installFailed = t1.installFailed;
 
     // (7) Tier 3 judge (only if we have a real spec, code ran, and it's not a fork).
-    if (spec.hadRealSpec && !installFailed && !gate.fork) {
+    //
+    // `!spec.size.overLimit` because that call is GUARANTEED to throw: runSeat folds the
+    // criteria into its overhead measurement and refuses to fire a request it already knows
+    // exceeds the seat budget. The verdict is decided either way — spec_too_large blocks —
+    // so firing it would buy an identical red check minus the diagnosis, plus the CI minutes.
+    // Falling to the else still runs createJudge, so the cross-family guard is not skipped.
+    if (spec.hadRealSpec && !spec.size.overLimit && !installFailed && !gate.fork) {
       logger.step(7, 'cross-family judge');
       // Opt-in adversarial "refute-first" judging (R2a): per-repo config.judge.adversarial,
       // or the FELIX_JUDGE_ADVERSARIAL env for a global/Action toggle. Default off.

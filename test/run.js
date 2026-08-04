@@ -17,10 +17,13 @@ const {
   detect, merge, validate, loadConfig, resolveWorkdir,
   POLICY_KEYS, MECHANICS_KEYS, DEFAULT_SKIP_GLOBS, DEFAULT_SECRETS,
 } = require('../src/engine/config');
-const { extractCriteria, buildSpec, linkedIssueNumbers } = require('../src/engine/spec');
+const { extractCriteria, buildSpec, linkedIssueNumbers, criteriaCapChars } = require('../src/engine/spec');
 const { compose, VERDICTS, CAUSES, INSUFFICIENT_CAUSES, conclusionFor } = require('../src/engine/verdict');const { assertCrossFamily, buildPrompt, createJudge, mergeChunkRulings, chunkVerdict, PROVIDERS } = require('../src/engine/judge');
 const {
   estimateTokens, tokensToChars, splitDiffByFile, packChunks, planJudgeCalls, paceMs,
+  regionCapChars, seatBudgetChars, smallestSeatTokens, promptBudgetTokens,
+  PROMPT_REGION_FRACTIONS, DIFF_FLOOR_FRACTION, SAFETY_FACTOR, CHARS_PER_TOKEN,
+  DEFAULT_MAX_CHUNKS,
 } = require('../src/engine/budget');
 const { scanSecrets, shannonEntropy, looksLikeRealSecret, runTier1 } = require('../src/engine/tier1');
 const {
@@ -387,7 +390,7 @@ test('createJudge threads adversarial but still enforces the cross-family guard,
 // PR-E-shaped dead-code fix that a unit test on stripFence alone would happily pass.
 console.log('judge prompt — untrusted content is fenced (F11)');
 
-const { FENCE_TOKEN, FENCE_STRIPPED, stripFence } = require('../src/engine/prompt');
+const { FENCE_TOKEN, FENCE_STRIPPED, stripFence, renderCriteriaList } = require('../src/engine/prompt');
 
 /**
  * Every line that carries the token, in order. Under a working fence these are exactly the
@@ -3342,6 +3345,252 @@ test('an explicit skipGlobs cannot suppress the control surface either', () => {
 test('a genuinely non-behavioral PR is still skipped', () => {
   const t = triageFiles([{ filename: 'README.md' }, { filename: 'docs/x.md' }], DEFAULT_SKIP_GLOBS);
   assert.strictEqual(t.skipped, true, 'the triage short-circuit must survive — this is not a blanket disable');
+});
+
+// ── The merged-spec size cap (spec_too_large) ────────────────────────────────
+//
+// These pin the RELATIONSHIP between the cap, the seat budget and what is left for the diff —
+// not the numbers. Every one of them should fail if someone raises a region fraction, grows the
+// prompt scaffolding, loosens a Tier 1 bound, lowers SAFETY_FACTOR or CHARS_PER_TOKEN, or adds
+// a provider with a smaller ceiling.
+console.log('spec size cap — PR-authored text cannot drive the judge prompt over the seat budget');
+
+/** GitHub's hard limit on the body of a pull request or an issue. */
+const GH_BODY_MAX = 65_536;
+const SMALL_SEAT = smallestSeatTokens(PROVIDERS);
+const CRITERIA_CAP = criteriaCapChars();
+const xs = (n) => 'x'.repeat(Math.max(0, n));
+
+/** A criterion line that survives extractCriteria: a checkbox bullet, past the 4-char minimum. */
+const critLine = (n, width, salt = '') =>
+  `- [ ] ${salt}${String(n).padStart(6, '0')} ${xs(Math.max(0, width - 14 - salt.length))}`;
+
+/** A body filled as close to GitHub's cap as whole criteria lines allow. */
+const maxBody = (width, salt = '') => {
+  const head = '## Acceptance criteria\n';
+  const n = Math.floor((GH_BODY_MAX - head.length) / (width + 1));
+  return head + Array.from({ length: n }, (_, i) => critLine(i, width, salt)).join('\n');
+};
+
+/** A spec object already over the cap, for the pure compose() ordering tests. */
+const overSpec = (extra = {}) => ({
+  hadRealSpec: true, total: 9000, source: 'PR description, issue #12', criteria: [],
+  size: { renderedChars: CRITERIA_CAP + 1, limitChars: CRITERIA_CAP, overLimit: true },
+  ...extra,
+});
+
+test('the cap is derived from the smallest seat Felix ships, never hardcoded', () => {
+  const expected = Math.floor(
+    Math.floor(SMALL_SEAT * SAFETY_FACTOR) * CHARS_PER_TOKEN * PROMPT_REGION_FRACTIONS.criteria
+  );
+  assert.strictEqual(CRITERIA_CAP, expected);
+  assert.strictEqual(seatBudgetChars(SMALL_SEAT), Math.floor(SMALL_SEAT * SAFETY_FACTOR) * CHARS_PER_TOKEN);
+  // The registry minimum, not the seated one — which keys a repo holds must never decide
+  // whether a PR is gradeable.
+  assert.strictEqual(SMALL_SEAT, Math.min(...Object.values(PROVIDERS).map((p) => p.maxPromptTokens)));
+});
+
+test('the worst LEGAL prompt still leaves the diff its floor', () => {
+  // Everything a PR controls, each sitting exactly at its cap, in the most expensive mode:
+  // adversarial refute-first plus the widest chunk header Felix can print.
+  const NAME = 'x';
+  const tier1 = [{
+    name: NAME,
+    status: 'fail',
+    detail: xs(regionCapChars('checks', SMALL_SEAT) - `- ${NAME}: FAIL ()`.length),
+    output: xs(regionCapChars('tier1Output', SMALL_SEAT) - `### ${NAME} output\n`.length),
+  }];
+  const overheadChars = buildPrompt({
+    prTitle: xs(256), // GitHub's PR title cap
+    criteria: [{ text: xs(CRITERIA_CAP - '1. '.length) }],
+    diff: '',
+    tier1,
+    adversarial: true,
+    chunk: { index: DEFAULT_MAX_CHUNKS, total: DEFAULT_MAX_CHUNKS },
+  }).length;
+
+  const plan = planJudgeCalls({
+    diff: 'diff --git a/a b/a\n+x\n', overheadChars, maxPromptTokens: SMALL_SEAT,
+  });
+  assert.strictEqual(plan.coverage.overBudget, false,
+    `overhead ${overheadChars} already exceeds the ${seatBudgetChars(SMALL_SEAT)}-char seat budget`);
+
+  const left = seatBudgetChars(SMALL_SEAT) - overheadChars;
+  assert.ok(left >= DIFF_FLOOR_FRACTION * seatBudgetChars(SMALL_SEAT),
+    `only ${left} chars left for the diff, below the ${DIFF_FLOOR_FRACTION} floor. ` +
+    'Re-split PROMPT_REGION_FRACTIONS — do not lower the floor.');
+});
+
+test('a maxed PR body plus one maxed linked issue is refused, not graded', () => {
+  // The measured induction path: the body alone falls ~37% short of the seat budget, and one
+  // linked issue clears it. Both criterion widths, because count and char-total are different
+  // levers and a cap on either alone would be defeated by the other.
+  for (const width of [40, 120]) {
+    const spec = buildSpec(
+      { title: 'x', body: maxBody(width) },
+      [{ number: 100, title: 't', body: maxBody(width, 'a') }],
+      []
+    );
+    assert.strictEqual(spec.size.overLimit, true, `width ${width}: the merged set was not flagged`);
+    const v = compose({ spec, tier1: [], tier3: null, judgeStatus: {} });
+    assert.strictEqual(v.cause, CAUSES.SPEC_TOO_LARGE, `width ${width}`);
+    assert.strictEqual(v.verdict, VERDICTS.NOT_VERIFIED, `width ${width}`);
+    assert.strictEqual(conclusionFor(v.verdict), 'failure',
+      'neutral counts as PASSING on GitHub — this state is PR-inducible and must be red');
+    assert.ok(!/x{50}/.test(v.required_to_pass.join(' ')),
+      'the message must name the numbers, never echo the criteria back');
+  }
+});
+
+test('the cap binds BELOW the induction threshold — a maxed body alone is refused too', () => {
+  // A body filled to GitHub's own limit could never induce judge_error by itself. It is still
+  // far past what may be spent on criteria while leaving the diff its floor, so the cap is
+  // deliberately tighter than the failure it prevents.
+  const spec = buildSpec({ title: 'x', body: maxBody(40) }, [], []);
+  assert.strictEqual(spec.size.overLimit, true);
+  assert.ok(spec.size.renderedChars > CRITERIA_CAP);
+});
+
+test('many tiny criteria amplify 2.5x+ — why the cap counts rendered chars, not text', () => {
+  // The `${i+1}. ` numbering is unbounded per-criterion overhead that a sum-of-texts cap does
+  // not count. This is the shape that defeats one.
+  const tiny = Array.from({ length: 10_200 }, () => ({ text: 'abcd' }));
+  const textChars = tiny.reduce((n, c) => n + c.text.length, 0);
+  const rendered = renderCriteriaList(tiny).length;
+  assert.ok(rendered >= 2.5 * textChars,
+    `only ${(rendered / textChars).toFixed(2)}x amplification — re-check before trusting a text-length cap`);
+  assert.ok(rendered > seatBudgetChars(SMALL_SEAT),
+    'this shape must overrun the WHOLE seat budget, or it is not the attack');
+});
+
+test('buildSpec measures the RENDERED set — a text-length cap would miss this shape', () => {
+  // 5,000 distinct 4-char criteria: ~20,000 chars of text, comfortably UNDER the cap, but far
+  // over it once the `${i+1}. ` numbering is counted. This is the shape that separates the two
+  // candidate measures end to end, and the amplification test above does not cover it — that
+  // one exercises renderCriteriaList directly, so a buildSpec that quietly summed text lengths
+  // instead would still pass it.
+  const n = 5000;
+  const body = `## Acceptance criteria\n${
+    Array.from({ length: n }, (_, i) => `- [ ] ${String(i).padStart(4, '0')}`).join('\n')}`;
+  assert.ok(body.length <= GH_BODY_MAX, 'the attack must fit inside a real GitHub body');
+  const spec = buildSpec({ title: 'x', body }, [], []);
+  assert.strictEqual(spec.total, n, 'dedupe must not collapse these — the texts are distinct');
+  const textChars = spec.criteria.reduce((acc, c) => acc + c.text.length, 0);
+  assert.ok(textChars < CRITERIA_CAP,
+    `text sum ${textChars} must sit UNDER the cap or this test proves nothing`);
+  assert.strictEqual(spec.size.overLimit, true, 'the rendered set is what actually costs budget');
+});
+
+test('buildPrompt renders criteria through the same function the cap measures', () => {
+  const criteria = [{ text: 'alpha beta' }, { text: 'gamma delta' }];
+  const p = buildPrompt({ prTitle: 't', criteria, diff: '', tier1: [] });
+  assert.ok(p.includes(renderCriteriaList(criteria)),
+    'a private renderer here would silently invalidate the cap and no test would notice');
+});
+
+test('stripping a fence token cannot grow the text it sanitizes', () => {
+  assert.ok(FENCE_STRIPPED.length <= FENCE_TOKEN.length,
+    'a longer marker re-opens a size amplification the cap does not model');
+});
+
+test('an unbounded Tier 1 output cannot drive the prompt over the budget either', () => {
+  // The second lever. The secrets scan, the deps check, the crap skip list and a browser flow
+  // all emit one line per finding, all PR-controlled, none bounded at the producer. A criteria
+  // cap alone would leave this wide open.
+  const huge = 'y'.repeat(2_000_000);
+  const tier1 = Array.from({ length: 20 }, (_, i) => ({
+    name: `chk${i}`, status: 'fail', detail: huge, output: huge,
+  }));
+  const overheadChars = buildPrompt({
+    prTitle: 't', criteria: [{ text: 'a criterion' }], diff: '', tier1, adversarial: true,
+    chunk: { index: DEFAULT_MAX_CHUNKS, total: DEFAULT_MAX_CHUNKS },
+  }).length;
+  const plan = planJudgeCalls({
+    diff: 'diff --git a/a b/a\n+x\n', overheadChars, maxPromptTokens: SMALL_SEAT,
+  });
+  assert.strictEqual(plan.coverage.overBudget, false,
+    `80 MB of Tier 1 text still produced ${overheadChars} chars of overhead`);
+});
+
+test('a truncated evidence region says so where the judge can read it', () => {
+  // Evidence may be shortened; it may not be shortened SILENTLY. Same contract packChunks uses
+  // for an oversized file.
+  const p = buildPrompt({
+    prTitle: 't', criteria: [{ text: 'a criterion' }], diff: '',
+    tier1: [{ name: 'secrets scan', status: 'fail', detail: 'd', output: 'z'.repeat(500_000) }],
+  });
+  assert.match(p, /failing check output truncated — \d+ of \d+ chars not shown/);
+  assert.ok(p.length < seatBudgetChars(SMALL_SEAT),
+    `the region was not actually bounded — the prompt is ${p.length} chars`);
+});
+
+test('spec_too_large is not exemptable — an adopter cannot configure it to pass', () => {
+  assert.ok(!INSUFFICIENT_CAUSES.includes(CAUSES.SPEC_TOO_LARGE),
+    'listing it would make it exemptable AND create a gate that can never fire (it is NOT VERIFIED)');
+  assert.throws(
+    () => resolveGating({ gating: { insufficientExempt: ['spec_too_large'] } }),
+    /unrecognized value/,
+    'the config must be refused loudly, not accepted and quietly ignored');
+});
+
+test('spec_too_large is red even with gating disabled — the default configuration', () => {
+  const v = compose({ spec: overSpec(), tier1: [], tier3: null, judgeStatus: {} });
+  const d = gateDecision({ verdict: v.verdict, cause: v.cause, gating: resolveGating({}) });
+  assert.strictEqual(d.blocks, false, 'gating is off by default, so it does not block');
+  assert.strictEqual(conclusionFor(v.verdict), 'failure',
+    'but the check must still be RED — a neutral here would pass a Required check in the majority setup');
+});
+
+test('install failure is still diagnosed before spec size', () => {
+  // Deliberate: ordering cannot open or close a lane here (an attacker wanting the neutral just
+  // breaks their own install with an ordinary spec), so the tie goes to diagnostics.
+  const v = compose({ spec: overSpec(), tier1: [], installFailed: true, tier3: null, judgeStatus: {} });
+  assert.strictEqual(v.cause, CAUSES.INSTALL_FAILED);
+});
+
+test('an oversized spec never falls through to the one exempt cause', () => {
+  // If this branch were reordered below the tier3 block, a repo with no judge key would land on
+  // judge_unconfigured — the single cause an adopter is allowed to let pass.
+  const v = compose({
+    spec: overSpec(), tier1: [], tier3: null, installFailed: false, judgeStatus: { configured: false },
+  });
+  assert.strictEqual(v.cause, CAUSES.SPEC_TOO_LARGE);
+});
+
+test('an oversized spec outranks the no_spec branch', () => {
+  // Unobservable today (an over-limit spec always has hadRealSpec true), pinned so a future
+  // fourth spec source cannot silently downgrade this failure into a neutral.
+  const v = compose({ spec: overSpec({ hadRealSpec: false }), tier1: [], tier3: null, judgeStatus: {} });
+  assert.strictEqual(v.cause, CAUSES.SPEC_TOO_LARGE);
+});
+
+test('an honest monorepo spec keeps real headroom', () => {
+  // 10 linked issues x 20 criteria x ~100 chars, far past anything Felix's own PRs carry. The
+  // 60% assertion means lowering the fraction fails HERE rather than failing a contributor.
+  const honest = Array.from({ length: 200 }, (_, i) => ({ text: `${'c'.repeat(99)}${i % 10}` }));
+  const rendered = renderCriteriaList(honest).length;
+  assert.ok(rendered <= 0.6 * CRITERIA_CAP,
+    `an honest 200-criterion spec sits at ${((100 * rendered) / CRITERIA_CAP).toFixed(0)}% of the cap — too close`);
+});
+
+test('an ordinary spec is unaffected, and reports its size', () => {
+  const spec = buildSpec(
+    { title: 'x', body: '## Acceptance criteria\n- [ ] POST /api/x returns 201\n- [ ] it logs the id\n' },
+    [], []
+  );
+  assert.strictEqual(spec.size.overLimit, false);
+  assert.strictEqual(spec.total, 2);
+  assert.strictEqual(spec.size.renderedChars, renderCriteriaList(spec.criteria).length);
+  assert.strictEqual(compose({ spec, tier1: [], tier3: null, judgeStatus: { configured: false } }).cause,
+    CAUSES.JUDGE_UNCONFIGURED, 'a normal spec must still reach the normal branches');
+});
+
+test('a repo on a smaller seat gets a smaller cap, not one sized for a seat it lacks', () => {
+  const lowered = promptBudgetTokens({ FELIX_JUDGE_MAX_PROMPT_TOKENS: '10000' }, PROVIDERS);
+  assert.strictEqual(lowered, 10_000);
+  assert.ok(criteriaCapChars(lowered) < CRITERIA_CAP,
+    'honoring the override is what keeps the cap honest on a small rate-limit tier');
+  assert.strictEqual(promptBudgetTokens({}, PROVIDERS), SMALL_SEAT);
 });
 
 // Run the deferred async tests (judge wire-contract) after the sync suite, then tally.

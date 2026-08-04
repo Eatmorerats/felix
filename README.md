@@ -11,7 +11,7 @@ asked for?"*
 | Verdict | Meaning |
 | --- | --- |
 | ✅ `VERIFIED` | All hard Tier 1 checks pass **and** every mapped criterion is met. |
-| ❌ `NOT VERIFIED` | A hard check failed, or the judge found a criterion unmet. |
+| ❌ `NOT VERIFIED` | A hard check failed, the judge found a criterion unmet, or the acceptance criteria are too large to grade ([see below](#the-acceptance-criteria-are-capped)). |
 | ⚠️ `INSUFFICIENT EVIDENCE` | No spec found, install/build broke, or the judge was unavailable. |
 | ⏭️ `SKIPPED` | Only non-behavioral files changed (docs, lockfiles, images). |
 
@@ -205,7 +205,7 @@ the contributor fix it":
 | `install_failed` | ✅ yes — `"preinstall": "exit 1"` | 🔒 blocks |
 | `no_spec` | ✅ yes — and cheapest of all: write no acceptance criteria | 🔒 blocks |
 | `fork` | ✅ yes — *selectable*: open the PR from a fork and the judge is skipped | 🔒 blocks |
-| `judge_error` | ✅ yes — criteria come from the PR body **plus its linked issues**, and can be sized to break the judge | 🔒 blocks |
+| `judge_error` | ✅ yes — the judge call itself failed ([the cheapest levers are now closed up front](#the-acceptance-criteria-are-capped)) | 🔒 blocks |
 | `judge_unconfigured` | ❌ no — it is your own missing key | 🔓 exempt |
 | `judge_unavailable_unknown` | ⚠️ residual — the judge returned nothing and recorded no reason | 🔒 blocks |
 
@@ -395,8 +395,45 @@ judges in one pass while the OpenAI seat chunks the same diff).
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `FELIX_JUDGE_MAX_PROMPT_TOKENS` | per-vendor (openai 30k, gemini 200k) | Override every seat's prompt budget. Raise it if your account's TPM allows. |
+| `FELIX_JUDGE_MAX_PROMPT_TOKENS` | per-vendor (openai 30k, gemini 200k) | Override every seat's prompt budget. Raise it if your account's TPM allows. Also lowers the criteria cap below. |
 | `FELIX_JUDGE_MAX_CHUNKS` | `6` | Max judge calls per seat per PR. Higher = better coverage on huge PRs, more CI minutes. |
+
+### The acceptance criteria are capped
+
+Everything in a judge prompt that isn't the diff is **written by the pull request under
+review** — the criteria come from its body and the issues it links, the Tier 1 rows carry its
+changed-file paths, and the failing-check output is the stdout of its own code. Left unbounded,
+any one of them can push the prompt past the seat budget on its own, and Felix reports
+`judge_error`.
+
+So the non-diff regions are budgeted as fractions of the **smallest seat Felix ships** — the
+strictest one, regardless of which vendor keys your repo holds, so adding a second key never
+silently changes whether a PR is gradeable:
+
+| Region | Share of the seat budget | On overflow |
+| --- | --- | --- |
+| Acceptance criteria | 40% (~40,800 chars) | ❌ **blocks** — `spec_too_large` |
+| Failing-check output | 15% | ✂️ truncated, with a marker the judge can read |
+| Tier 1 result rows | 5% | ✂️ truncated, with a marker the judge can read |
+
+**Why criteria block instead of truncating.** The criteria are *the question being asked*.
+Grading a subset and reporting the result as complete isn't a degradation, it's a bypass: an
+author pushes the one criterion their code violates past the cutoff and collects a pass on the
+survivors. Tier 1 output is *evidence*, so showing less of it is honest as long as the judge can
+see that it happened.
+
+The cap applies to the **merged** set, after linked issues are folded in — Felix fetches up to
+ten, each with its own 65,536-char GitHub body, so a cap on the PR body alone would defend
+nothing. It is deliberately tighter than the failure it prevents: a maxed-out body alone could
+never break the judge, but it still leaves no room for the diff.
+
+An honest PR has enormous headroom — ten linked issues carrying twenty ~100-char criteria each
+lands at about half the cap. If you do hit it, the check names the criterion count, the
+character count and the limit; split the PR so each part carries its own spec.
+
+`spec_too_large` is `NOT VERIFIED`, not insufficiency, and is **not** exemptable — it is the one
+state that is entirely author-caused *and* entirely author-fixable, so no repo can configure it
+to pass. Measured end-to-end by `npm run test:induction`.
 
 ## Safety
 
