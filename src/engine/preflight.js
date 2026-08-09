@@ -47,7 +47,9 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { version } = require('../../package.json');
 const { logger } = require('./util/logger');
 const { loadConfig, resolveWorkdir, parseConfigJSON, CONFIG_FILENAME } = require('./config');
@@ -69,6 +71,22 @@ const { preloadOptional, armModuleLock } = require('./preload');
 
 /** Where criteria live when the caller does not say. Conventional, and gitignore-able. */
 const DEFAULT_CRITERIA_PATH = path.join('.felix', 'preflight-criteria.md');
+
+/**
+ * Pre-flight's scratch space lives OUTSIDE the repository, keyed by the repo's path.
+ *
+ * The CI sandbox puts its worktree in `<repo>/.felix-worktrees/` and gets away with it because
+ * Felix's own .gitignore lists that path — an adopter's does not, and pre-flight snapshots the
+ * working tree with `git add -A`. Writing scratch inside the repo therefore feeds Felix's output
+ * back into Felix's input: the second run folds a whole checked-out copy of the repository into
+ * its own snapshot, the tree is never byte-identical to the last one, and the "unchanged tree, do
+ * not re-judge" rule silently stops working. snapshot.js drops the directory defensively as well;
+ * this is the half that stops it being created in the first place.
+ */
+function scratchDirFor(repoRoot) {
+  const key = crypto.createHash('sha1').update(path.resolve(repoRoot)).digest('hex').slice(0, 12);
+  return path.join(os.tmpdir(), 'felix-preflight', key);
+}
 
 /**
  * The ONLY two causes an automated loop may retry. Everything else is terminal.
@@ -274,7 +292,7 @@ function loadCriteria({ repoRoot, criteriaPath }) {
  * information. It is also the local echo of what CI's attempt cap is really for.
  */
 function judgeGuard({ repoRoot, sha, env, deps = {} }) {
-  const statePath = deps.statePath || path.join(repoRoot, '.felix-worktrees', 'preflight-state.json');
+  const statePath = deps.statePath || path.join(scratchDirFor(repoRoot), 'preflight-state.json');
   const today = (deps.today || new Date().toISOString().slice(0, 10));
   const cap = Number(env.FELIX_PREFLIGHT_JUDGE_CAP) > 0
     ? Number(env.FELIX_PREFLIGHT_JUDGE_CAP)
@@ -328,10 +346,15 @@ function judgeGuard({ repoRoot, sha, env, deps = {} }) {
  * @param {string} [opts.base]         explicit base ref to diff against
  * @param {boolean} [opts.judge]       call the cross-family judge (default false — it costs money)
  * @param {object} [opts.env]          environment (default process.env)
+ * @param {object} [opts.deps]         test seam: { createJudge }. The judge is the one step that
+ *                                     costs money and makes a network call, so the eligibility
+ *                                     conjunction below is unreachable from a test without it —
+ *                                     which is exactly how a clause gets dropped unnoticed.
  * @returns {Promise<object>} { verdict, cause, retryable, required_to_pass, body, ... }
  */
 async function runPreflight(opts = {}) {
   const env = opts.env || process.env;
+  const makeJudge = (opts.deps && opts.deps.createJudge) || createJudge;
   const started = Date.now();
   const warnings = [];
   const gitEnv = buildCleanEnv();
@@ -405,12 +428,15 @@ async function runPreflight(opts = {}) {
   // than drift: there is no fork here, no durable pin and no durable attempt count, and there IS
   // an explicit opt-in plus the unchanged-tree rule. What the two DO share — a real spec, a spec
   // small enough to grade, and code that actually built — is asserted below in the same order.
-  let guard = null;
   const judgeWanted = Boolean(opts.judge);
-  if (judgeWanted) {
-    guard = judgeGuard({ repoRoot, sha: snap.sha, env });
-    if (!guard.allowed) warnings.push(`⚠️ JUDGE SKIPPED — ${guard.reason}`);
-  }
+  // The guard is built UNCONDITIONALLY, even when the judge was not asked for. Building it only
+  // when `judgeWanted` made the two conditions collapse into one: `guard && guard.allowed` was
+  // then false whenever --judge was absent, so the `judgeWanted` clause in the conjunction below
+  // was doing nothing and no test could tell if it were deleted. A mutation run proved exactly
+  // that — the clause survived removal. Now the two are independent: `judgeWanted` is the opt-in,
+  // `guard.allowed` is the spend rule, and each can be pinned on its own.
+  const guard = judgeGuard({ repoRoot, sha: snap.sha, env });
+  if (judgeWanted && !guard.allowed) warnings.push(`⚠️ JUDGE SKIPPED — ${guard.reason}`);
   // The judge reads OPENAI_API_KEY. Prefer a dedicated pre-flight key so a runaway local loop
   // cannot spend the budget CI depends on, and say so when there isn't one.
   const judgeEnv = { ...env };
@@ -434,7 +460,9 @@ async function runPreflight(opts = {}) {
   armModuleLock();
 
   try {
-    sandbox = await createLocalSandbox({ repoPath: repoRoot, sha: snap.sha });
+    // rootDir outside the repo — see scratchDirFor. The worktree still shares the repo's object
+    // store (that is what makes `git worktree add` cheap); only the checkout location moves.
+    sandbox = await createLocalSandbox({ repoPath: repoRoot, sha: snap.sha, rootDir: scratchDirFor(repoRoot) });
     const cwd = resolveWorkdir(sandbox.dir, config.workdir);
 
     logger.step(6, 'running Tier 1 checks');
@@ -450,7 +478,7 @@ async function runPreflight(opts = {}) {
       && !spec.size.overLimit
       && !installFailed
       && judgeWanted
-      && guard && guard.allowed;
+      && guard.allowed;
 
     if (eligible) {
       logger.step(7, 'cross-family judge');
@@ -458,7 +486,7 @@ async function runPreflight(opts = {}) {
         (config.judge && config.judge.adversarial)
         || /^(1|true|yes|on)$/i.test(env.FELIX_JUDGE_ADVERSARIAL || '')
       );
-      const judge = createJudge(judgeEnv, { adversarial }); // throws if Anthropic family
+      const judge = makeJudge(judgeEnv, { adversarial }); // throws if Anthropic family
       if (judge) {
         // Charged BEFORE the call, not after. Same reason CI awaits logVerdict before publishing
         // the check: a counter that only increments on success is not a counter, it is a
@@ -474,7 +502,7 @@ async function runPreflight(opts = {}) {
         }
       }
     } else {
-      createJudge(judgeEnv); // still enforce the cross-family guard even when skipping
+      makeJudge(judgeEnv); // still enforce the cross-family guard even when skipping
       if (!judgeWanted) logger.info('judge not requested — pass --judge to grade the criteria (costs money)');
     }
   } finally {
@@ -529,6 +557,14 @@ async function runPreflight(opts = {}) {
     // The loop's contract. Computed here, from the cause, so a caller cannot decide for itself
     // that no_spec looks retryable — see RETRYABLE_CAUSES.
     retryable: RETRYABLE_CAUSES.includes(verdictObj.cause),
+    // Surfaced so a test can assert the judge was NOT called, which is the only way to pin the
+    // eligibility conjunction — a skipped call leaves no other trace in the result.
+    judge: {
+      requested: judgeWanted,
+      attempted: judgeStatus.attempted,
+      error: judgeStatus.error,
+      guard: { allowed: guard.allowed, reason: guard.reason || null },
+    },
     fingerprint,
     criteriaPath: criteria.path,
     criteriaPresent: criteria.present,

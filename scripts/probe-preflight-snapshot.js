@@ -34,11 +34,19 @@ function makeRepo() {
   git(dir, ['config', 'user.email', 'probe@felix.invalid']);
   git(dir, ['config', 'user.name', 'Probe']);
 
+  // `tracked-then-ignored.txt` is committed FIRST and only later listed in .gitignore. Tracking
+  // beats .gitignore — but only for files the index already knows, which is the one thing the
+  // read-tree seed buys. Without it `add -A` skips this file and it vanishes from the snapshot.
   fs.writeFileSync(path.join(dir, '.gitignore'), 'secret.env\n');
+  fs.writeFileSync(path.join(dir, 'tracked-then-ignored.txt'), 'committed before it was ignored\n');
   fs.writeFileSync(path.join(dir, 'tracked.txt'), 'v1\n');
   fs.writeFileSync(path.join(dir, 'will-stash.txt'), 'original\n');
   git(dir, ['add', '-A']);
   git(dir, ['commit', '-qm', 'base']);
+
+  fs.appendFileSync(path.join(dir, '.gitignore'), 'tracked-then-ignored.txt\n');
+  git(dir, ['add', '.gitignore']);
+  git(dir, ['commit', '-qm', 'ignore a file that is already tracked']);
 
   // A stash the snapshot must not touch or consume.
   fs.writeFileSync(path.join(dir, 'will-stash.txt'), 'stashed change\n');
@@ -87,9 +95,31 @@ const capture = (dir) => ({
     check('the UNTRACKED file is included', inTree.includes('untracked.txt'));
     check('the GITIGNORED file is EXCLUDED', !inTree.includes('secret.env'),
       'a local green must not come from an uncommitted secret, and it must never be blobbed into .git');
+    check('a TRACKED file that is also gitignored survives', inTree.includes('tracked-then-ignored.txt'),
+      'tracking beats .gitignore only for files the index knows — this is what read-tree buys');
     check('untracked files are reported to the caller', snap.untracked.includes('untracked.txt'),
       `reported: ${snap.untracked.join(', ')}`);
     check('the tree is marked dirty', snap.dirty === true);
+
+    // A leftover CI worktree inside the repo must never be folded in. It is only gitignored in
+    // Felix's OWN repo, and without the explicit drop the next snapshot swallows a whole second
+    // copy of the repository — which also means no two snapshots are ever byte-identical.
+    fs.mkdirSync(path.join(dir, '.felix-worktrees', 'pr-1-abcdef12'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.felix-worktrees', 'pr-1-abcdef12', 'leftover.txt'), 'a previous run\n');
+    const withLeftover = await snapshotWorkingTree({ repoPath: dir });
+    check('a leftover .felix-worktrees is EXCLUDED even when not gitignored',
+      !git(dir, ['ls-tree', '-r', '--name-only', withLeftover.sha]).includes('.felix-worktrees'));
+    check('and it does not change the tree', withLeftover.tree === snap.tree,
+      'otherwise the unchanged-tree rule can never fire in an adopter repo');
+    fs.rmSync(path.join(dir, '.felix-worktrees'), { recursive: true, force: true });
+
+    // A deletion on disk must reach the tree, or pre-flight grades a file the author removed.
+    fs.unlinkSync(path.join(dir, 'staged.txt'));
+    const deleted = await snapshotWorkingTree({ repoPath: dir });
+    check('a file deleted in the working tree is absent from the snapshot',
+      !git(dir, ['ls-tree', '-r', '--name-only', deleted.sha]).split('\n').includes('staged.txt'));
+    fs.writeFileSync(path.join(dir, 'staged.txt'), 'staged content\n');
+    git(dir, ['add', 'staged.txt']);
 
     console.log('\n[3] the snapshot SHA is deterministic');
     const again = await snapshotWorkingTree({ repoPath: dir });

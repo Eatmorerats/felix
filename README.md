@@ -89,6 +89,71 @@ node bin/felix.js owner/repo#42 --post --repo-path /path/to/clone
 
 Exit codes: `0` VERIFIED/SKIPPED · `1` NOT VERIFIED · `2` INSUFFICIENT EVIDENCE · `3` error.
 
+## Pre-flight: run Felix before the PR exists
+
+`felix preflight` verifies your **working tree** — uncommitted and untracked changes included —
+against a local criteria file. It is meant for the loop an agent runs *before* opening a PR, so
+that CI's single independent verdict is spent once, on finished work.
+
+```bash
+# write the acceptance criteria you intend to put in the PR description
+mkdir -p .felix && $EDITOR .felix/preflight-criteria.md
+
+# Tier 1 only — free, no API calls. This is the loop you want 90% of the time.
+node bin/felix.js preflight
+
+# also grade the criteria with the cross-family judge (costs money)
+node bin/felix.js preflight --judge
+
+# machine-readable, for a loop driver
+node bin/felix.js preflight --json
+```
+
+Exit codes match the PR path (`0` clean · `1` NOT VERIFIED · `2` INSUFFICIENT · `3` error).
+Whether a failure is worth **retrying** is a separate field, `retryable`, in `--json`.
+
+### What it will and will not do
+
+**It publishes nothing.** No `felix_verdicts` row, no PR comment, no check run. It does not need
+`GITHUB_TOKEN` or any `SUPABASE_*` variable, and `scripts/probe-preflight-containment.js` asserts
+all of that — including a control leg proving the CI path *does* load what pre-flight does not.
+This is not politeness. The freeze baseline is the earliest `spec_fingerprint` logged for a PR, so
+a single local row would let an agent pin its own rubric; and `judge_attempted` rows are what the
+ten-attempt cap counts, so a local loop could drain CI's budget from outside.
+
+**Only two causes are retryable by a loop:** `criteria_unmet` and `install_failed` — the two states
+where the fix is in the code. Everything else is terminal, and two of them are the hard line:
+
+> `no_spec` and `spec_too_large` stay terminal for any agent. The moment a loop can author or trim
+> the rubric, the verifier grades a spec written by the thing being graded, and it is decorative.
+
+**There is deliberately no CI auto-repair.** `required_to_pass` and the judge's reasons are derived
+from head content, so piping them to an agent that holds push credentials is a prompt-injection
+channel. Locally the same text is not a channel — the agent already owns the tree it is reading
+back — which is the whole reason the loop belongs here and not there.
+
+### Spend, honestly
+
+The judge is **off** unless you pass `--judge`. Beyond that:
+
+- pre-flight refuses to re-grade a tree that is byte-identical to the last one it graded (the
+  snapshot SHA is deterministic in tree + HEAD), because a re-roll buys judge variance, not
+  information;
+- a per-day counter (`FELIX_PREFLIGHT_JUDGE_CAP`, default 20) lives outside your repo in the
+  system temp directory;
+- set **`OPENAI_API_KEY_PREFLIGHT`** to a key with a hard spend limit at the vendor. Pre-flight
+  prefers it over `OPENAI_API_KEY` and warns when it has to fall back.
+
+Only that last one is a real limit. The counter is a file, and the process invoking the CLI can
+delete it — its value is that doing so is a visible act rather than silent overspend.
+
+### Criteria provenance
+
+Pre-flight prints the fingerprint of the criteria it graded. CI pins the fingerprint of whatever
+the **PR description** says. Same text, same hash — so if the two differ, the criteria moved
+between your last local green and the PR you opened. Nothing enforces this locally; it is there so
+a human can see it, in the same place CI shows its own hash.
+
 ### Calibration
 
 Record real post-merge outcomes and see how Felix is doing over time:

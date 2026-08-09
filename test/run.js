@@ -46,6 +46,10 @@ const { resolveIsolation, wrapCommand, assertJailCoherent, preflightDocker } = r
 const { renderError } = require('../src/engine/comment');
 const { computeMetrics, OUTCOMES } = require('../src/engine/calibration');
 const { resolveGating, gateDecision } = require('../src/engine/gating');
+const {
+  RETRYABLE_CAUSES, resolveBaseRef, parseNameStatus, attachPatches,
+  localBaseConfigFetcher, judgeGuard, loadCriteria,
+} = require('../src/engine/preflight');
 const { parseRevertedPR, detectRevertedPRs } = require('../src/engine/outcomes');
 const { FIXTURES, oracleJudge, truthOutcome } = require('./calibration-fixtures');
 const { buildDrivePlan, interpretProbe, joinUrl, resolveDrive, interpretPageLoad, loadChromium } = require('../src/engine/drive');
@@ -4129,6 +4133,246 @@ test('a repo on a smaller seat gets a smaller cap, not one sized for a seat it l
   assert.ok(criteriaCapChars(lowered) < CRITERIA_CAP,
     'honoring the override is what keeps the cap honest on a small rate-limit tier');
   assert.strictEqual(promptBudgetTokens({}, PROVIDERS), SMALL_SEAT);
+});
+
+console.log('preflight — the local, PR-less mode');
+
+// A fake exec that answers `git <thing>` from a table. Keeps every decision below testable
+// without a fixture repo, which is what lets these run in the same second as the rest.
+function fakeGit(table) {
+  return (cmd) => {
+    for (const [match, out] of table) {
+      if (cmd.includes(match)) {
+        return Promise.resolve(out === null
+          ? { code: 1, stdout: '', stderr: '', combined: 'fatal', timedOut: false }
+          : { code: 0, stdout: out, stderr: '', combined: out, timedOut: false });
+      }
+    }
+    return Promise.resolve({ code: 1, stdout: '', stderr: '', combined: 'no match', timedOut: false });
+  };
+}
+
+test('only criteria_unmet and install_failed are retryable by a loop', () => {
+  assert.deepStrictEqual([...RETRYABLE_CAUSES].sort(), [CAUSES.CRITERIA_UNMET, CAUSES.INSTALL_FAILED].sort());
+});
+
+test('no_spec and spec_too_large are TERMINAL — the hard line', () => {
+  // If a loop can retry these, the only way to "pass" is to author or trim the rubric, and a
+  // verifier grading a spec written by the thing it is grading is decorative. Not configurable.
+  assert.ok(!RETRYABLE_CAUSES.includes(CAUSES.NO_SPEC), 'a loop must never be able to author the rubric');
+  assert.ok(!RETRYABLE_CAUSES.includes(CAUSES.SPEC_TOO_LARGE), 'a loop must never be able to trim the rubric');
+  assert.ok(!RETRYABLE_CAUSES.includes(CAUSES.SPEC_CHANGED));
+  assert.ok(!RETRYABLE_CAUSES.includes(CAUSES.ATTEMPTS_EXHAUSTED));
+  assert.ok(!RETRYABLE_CAUSES.includes(CAUSES.JUDGE_ERROR));
+});
+
+test('an EMPTY changed-file list is not SKIPPED — absence of data is not evidence of nothing', () => {
+  // `files.length > 0 &&` is the clause under test. A getFiles that returned [] because the API
+  // hiccuped, or a local diff that came back empty because the base ref was wrong, must not
+  // present as "only non-behavioral files changed" — that verdict is SKIPPED, which GitHub
+  // counts as passing. Surfaced by a mutation run: nothing pinned this before.
+  assert.strictEqual(triageFiles([], DEFAULT_SKIP_GLOBS).skipped, false);
+  assert.strictEqual(triageFiles([{ filename: 'README.md' }], DEFAULT_SKIP_GLOBS).skipped, true);
+});
+
+test('parseNameStatus produces GitHub-shaped file objects, renames included', () => {
+  const files = parseNameStatus(
+    'M\tsrc/a.js\nA\tsrc/b.js\nD\tsrc/gone.js\nR096\tsrc/old.js\tsrc/new.js\nC100\tsrc/x.js\tsrc/copy.js'
+  );
+  assert.deepStrictEqual(files.map((f) => `${f.status}:${f.filename}`), [
+    'modified:src/a.js', 'added:src/b.js', 'removed:src/gone.js', 'renamed:src/new.js', 'copied:src/copy.js',
+  ]);
+  // deps.js builds its rename map off previous_filename and silently maps nothing without it.
+  assert.strictEqual(files[3].previous_filename, 'src/old.js');
+  assert.strictEqual(files[4].previous_filename, 'src/x.js');
+});
+
+test('attachPatches hangs each per-file patch off the post-change name', () => {
+  const diff = [
+    'diff --git a/src/a.js b/src/a.js',
+    '--- a/src/a.js',
+    '+++ b/src/a.js',
+    '@@ -1 +1 @@',
+    '-old',
+    '+new',
+    'diff --git a/src/old.js b/src/new.js',
+    'similarity index 96%',
+  ].join('\n');
+  const files = attachPatches(
+    [{ filename: 'src/a.js', status: 'modified' }, { filename: 'src/new.js', status: 'renamed' }],
+    diff
+  );
+  assert.match(files[0].patch, /^diff --git a\/src\/a\.js/);
+  assert.match(files[0].patch, /\+new/);
+  // The b-side, not the a-side: a rename's patch belongs to the file that now exists.
+  assert.match(files[1].patch, /similarity index/);
+});
+
+test('judgeGuard refuses a second grading of an identical tree', () => {
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  fs.writeFileSync(statePath, JSON.stringify({ day: '2026-08-09', count: 1, lastJudgedSha: 'abc123def456' }));
+  const g = judgeGuard({ repoRoot: d, sha: 'abc123def456', env: {}, deps: { statePath, today: '2026-08-09' } });
+  assert.strictEqual(g.allowed, false);
+  assert.match(g.reason, /identical to the last graded run/);
+});
+
+test('judgeGuard allows a changed tree, and charges before the call', () => {
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  fs.writeFileSync(statePath, JSON.stringify({ day: '2026-08-09', count: 3, lastJudgedSha: 'oldsha' }));
+  const g = judgeGuard({ repoRoot: d, sha: 'newsha', env: {}, deps: { statePath, today: '2026-08-09' } });
+  assert.strictEqual(g.allowed, true);
+  g.charge();
+  const after = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  assert.strictEqual(after.count, 4, 'the attempt is charged whether or not the call succeeds');
+  assert.strictEqual(after.lastJudgedSha, 'newsha');
+});
+
+test('judgeGuard enforces the daily cap, and the env can move it', () => {
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  fs.writeFileSync(statePath, JSON.stringify({ day: '2026-08-09', count: 20, lastJudgedSha: 'x' }));
+  const at = judgeGuard({ repoRoot: d, sha: 'y', env: {}, deps: { statePath, today: '2026-08-09' } });
+  assert.strictEqual(at.allowed, false);
+  assert.match(at.reason, /cap 20/);
+  const raised = judgeGuard({ repoRoot: d, sha: 'y', env: { FELIX_PREFLIGHT_JUDGE_CAP: '50' }, deps: { statePath, today: '2026-08-09' } });
+  assert.strictEqual(raised.allowed, true, 'the cap is advisory and says so — it must be movable');
+});
+
+test('judgeGuard resets the daily count but KEEPS the last graded sha', () => {
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  fs.writeFileSync(statePath, JSON.stringify({ day: '2026-08-08', count: 20, lastJudgedSha: 'samesha' }));
+  const next = judgeGuard({ repoRoot: d, sha: 'samesha', env: {}, deps: { statePath, today: '2026-08-09' } });
+  // A new day refills the budget; it does not make re-rolling an UNCHANGED tree informative.
+  assert.strictEqual(next.allowed, false);
+  assert.match(next.reason, /identical to the last graded run/);
+});
+
+test('judgeGuard treats a corrupt state file as a fresh counter', () => {
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  fs.writeFileSync(statePath, 'not json at all');
+  const g = judgeGuard({ repoRoot: d, sha: 'z', env: {}, deps: { statePath, today: '2026-08-09' } });
+  assert.strictEqual(g.allowed, true, 'it is advisory: a corrupt tripwire must not block the run');
+});
+
+test('loadCriteria reports absence rather than inventing an empty spec', () => {
+  const d = tmpdir();
+  const missing = loadCriteria({ repoRoot: d, criteriaPath: '.felix/nope.md' });
+  assert.strictEqual(missing.present, false);
+  assert.strictEqual(missing.body, '');
+  fs.mkdirSync(path.join(d, '.felix'), { recursive: true });
+  fs.writeFileSync(path.join(d, '.felix', 'c.md'), '## Acceptance criteria\n\n- [ ] it works well\n');
+  const found = loadCriteria({ repoRoot: d, criteriaPath: '.felix/c.md' });
+  assert.strictEqual(found.present, true);
+  assert.match(found.body, /it works well/);
+});
+
+test('a local criteria file and a PR body with the same bullets fingerprint identically', () => {
+  // The whole provenance story rests on this: pre-flight prints a hash the author compares to
+  // what CI pins from the PR description. If the two can never agree, the feature is theatre.
+  const body = '## Acceptance criteria\n\n- [ ] returns 201 on create\n- [ ] rejects a blank name\n';
+  const local = buildSpec({ title: '', body }, [], []);
+  const ci = buildSpec({ title: 'some PR title', body }, [], []);
+  assert.ok(local.fingerprint, 'a real criteria set must be pinnable');
+  assert.strictEqual(local.fingerprint, ci.fingerprint);
+  // …and weakening one bullet must move it, or drift would be invisible.
+  const weakened = buildSpec({ title: '', body: body.replace('rejects a blank name', 'handles names') }, [], []);
+  assert.notStrictEqual(weakened.fingerprint, local.fingerprint);
+});
+
+test('an empty title is passed to buildSpec so no_spec cannot launder into a gradeable spec', () => {
+  // buildSpec falls back to the PR title when it finds no criteria. Locally there is no title,
+  // and manufacturing one from a branch name would make a no_spec run look gradeable.
+  const spec = buildSpec({ title: '', body: 'no criteria in here at all' }, [], []);
+  assert.strictEqual(spec.hadRealSpec, false);
+  assert.strictEqual(spec.fingerprint, null);
+  assert.strictEqual(compose({ spec, tier1: [], tier3: null, judgeStatus: { configured: true } }).cause, CAUSES.NO_SPEC);
+});
+
+atest('resolveBaseRef prefers origin\'s declared default branch', async () => {
+  const deps = { run: fakeGit([['symbolic-ref', 'origin/develop'], ['rev-parse --verify --quiet origin/develop', 'origin/develop']]) };
+  const b = await resolveBaseRef({ repoRoot: '/x', env: {}, deps });
+  assert.strictEqual(b.ref, 'origin/develop');
+});
+
+atest('resolveBaseRef falls back to a LOCAL branch and says so', async () => {
+  const deps = { run: fakeGit([['symbolic-ref', null], ['rev-parse --verify --quiet main', 'main']]) };
+  const b = await resolveBaseRef({ repoRoot: '/x', env: {}, deps });
+  assert.strictEqual(b.ref, 'main');
+  assert.match(b.source, /no origin/i, 'the user must be told they are comparing against a local ref');
+});
+
+atest('resolveBaseRef returns no ref at all rather than inventing one', async () => {
+  const b = await resolveBaseRef({ repoRoot: '/x', env: {}, deps: { run: fakeGit([]) } });
+  assert.strictEqual(b.ref, null, 'inventing a base makes the diff wrong in a way nothing downstream can detect');
+});
+
+atest('an explicit --base that is not a ref throws instead of silently drifting', async () => {
+  await assert.rejects(
+    () => resolveBaseRef({ repoRoot: '/x', env: {}, explicit: 'nope', deps: { run: fakeGit([]) } }),
+    /not a ref/
+  );
+});
+
+atest('policy is read from the base ref when it is readable', async () => {
+  const warnings = [];
+  const raw = '{"skipGlobs":["**/*.md"]}';
+  const fetch = localBaseConfigFetcher({
+    repoRoot: tmpdir(), env: {}, baseRef: 'origin/main', warnings,
+    deps: { run: fakeGit([['rev-parse --verify --quiet origin/main', 'origin/main'], ['show origin/main:felix.config.json', raw]]) },
+  });
+  const got = await fetch();
+  assert.strictEqual(got.present, true);
+  assert.strictEqual(got.raw, raw);
+  assert.strictEqual(warnings.length, 0);
+});
+
+atest('an unreadable base ref falls back to the working tree LOUDLY, and does not throw', async () => {
+  // The CI fetcher throws here, deliberately. Locally that would be theatre — the agent owns
+  // every ref — and it would break the offline / no-remote case for nothing.
+  const d = tmpdir();
+  fs.writeFileSync(path.join(d, 'felix.config.json'), '{"skipGlobs":[]}');
+  const warnings = [];
+  const fetch = localBaseConfigFetcher({ repoRoot: d, env: {}, baseRef: 'origin/main', warnings, deps: { run: fakeGit([]) } });
+  const got = await fetch();
+  assert.strictEqual(got.present, true);
+  assert.strictEqual(got.ref, 'your working tree');
+  assert.strictEqual(warnings.length, 1);
+  assert.match(warnings[0], /POLICY FALLBACK/);
+  assert.match(warnings[0], /may judge differently/);
+});
+
+atest('a config present at base but absent locally is not mistaken for an unreadable ref', async () => {
+  const warnings = [];
+  const fetch = localBaseConfigFetcher({
+    repoRoot: tmpdir(), env: {}, baseRef: 'origin/main', warnings,
+    deps: { run: fakeGit([['rev-parse --verify --quiet origin/main', 'origin/main'], ['show origin/main:felix.config.json', null]]) },
+  });
+  const got = await fetch();
+  assert.strictEqual(got.present, false);
+  assert.strictEqual(got.ref, 'origin/main');
+  assert.strictEqual(warnings.length, 0, 'a repo with no config at base is healthy, not degraded');
+});
+
+atest('POLICY DRIFT names the keys that actually differ', async () => {
+  const d = tmpdir();
+  fs.writeFileSync(path.join(d, 'felix.config.json'), '{"skipGlobs":["**"],"workdir":"."}');
+  const warnings = [];
+  const fetch = localBaseConfigFetcher({
+    repoRoot: d, env: {}, baseRef: 'origin/main', warnings,
+    deps: { run: fakeGit([
+      ['rev-parse --verify --quiet origin/main', 'origin/main'],
+      ['show origin/main:felix.config.json', '{"skipGlobs":["**/*.md"],"workdir":"."}'],
+    ]) },
+  });
+  const got = await fetch();
+  assert.strictEqual(got.raw, '{"skipGlobs":["**/*.md"],"workdir":"."}', 'the BASE version is what CI will use');
+  assert.match(warnings[0], /POLICY DRIFT/);
+  assert.match(warnings[0], /skipGlobs/);
+  assert.ok(!/workdir/.test(warnings[0]), 'only the differing keys, or the warning is noise');
 });
 
 // Run the deferred async tests (judge wire-contract) after the sync suite, then tally.

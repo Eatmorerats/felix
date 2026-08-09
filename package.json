@@ -19,7 +19,7 @@
     "test:induction": "node scripts/probe-judge-error-induction.js",
     "test:fingerprint": "node scripts/smoke-spec-fingerprint.js",
     "test:sentinel": "node scripts/smoke-spec-sentinel.js",
-    "test:preflight": "node scripts/probe-preflight-snapshot.js && node scripts/probe-preflight-containment.js"
+    "test:preflight": "node scripts/probe-preflight-snapshot.js && node scripts/probe-preflight-containment.js && node scripts/smoke-preflight.js"
   },
   "keywords": [
     "pr-verification",

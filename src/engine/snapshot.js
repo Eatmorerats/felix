@@ -119,10 +119,30 @@ async function snapshotWorkingTree({ repoPath, deps = {} }) {
 
   let tree;
   try {
-    // read-tree then `add -A`: the read-tree seeds the index so `add -A` sees deletions as
-    // deletions rather than as an empty index it is populating from scratch.
+    // Seed the throwaway index from HEAD before staging. The reason is narrower than it looks,
+    // and it is NOT about deletions — a deleted file is absent from disk either way, so an empty
+    // index and a seeded one produce the same tree for that case. A mutation run proved it.
+    //
+    // What it is actually for: TRACKED FILES THAT ARE ALSO GITIGNORED. Tracking wins over
+    // .gitignore, but only for files git already knows about — and with an empty index it knows
+    // about none. So without this line, a file that was committed and later added to .gitignore
+    // (an ordinary thing to do to a config or a build artifact) is skipped by `add -A` and
+    // VANISHES from the snapshot, and pre-flight silently grades a tree missing a tracked file.
     await git(`read-tree ${headSha}`, { cwd: repoRoot, env: idxEnv, deps });
     await git('add -A', { cwd: repoRoot, env: idxEnv, timeoutMs: 300000, deps });
+    // Felix's own scratch directory can never be part of the tree being graded.
+    //
+    // `createSandbox` checks PR code out into `<repo>/.felix-worktrees/`, and that path is only
+    // gitignored because Felix's own repo happens to ignore it — an adopter's does not. Without
+    // this, one leftover worktree makes the next snapshot fold an entire second copy of the
+    // repository into itself: the tree is enormous, it is never byte-identical to the previous
+    // one, and so the "unchanged tree, do not re-judge" refusal can never fire. Found by running
+    // pre-flight twice in a fixture repo and watching the file count go from 1 to 2.
+    //
+    // Done as a second command against the temp index rather than an `:(exclude)` pathspec: the
+    // pathspec magic needs parentheses through a shell:true spawn, and cmd.exe is exactly where
+    // that goes wrong quietly.
+    await git('rm -r --cached --ignore-unmatch -q .felix-worktrees', { cwd: repoRoot, env: idxEnv, deps });
     tree = await git('write-tree', { cwd: repoRoot, env: idxEnv, deps });
   } finally {
     // The temp index is scratch; a leftover would be harmless but this keeps tmpdir honest.
