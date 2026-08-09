@@ -16,7 +16,8 @@
     "test:hooks": "node scripts/probe-hook-env-leak.js",
     "test:deps": "node test/deps-live.js",
     "test:bypass": "node scripts/probe-insufficient-bypass.js",
-    "test:induction": "node scripts/probe-judge-error-induction.js"
+    "test:induction": "node scripts/probe-judge-error-induction.js",
+    "test:fingerprint": "node scripts/smoke-spec-fingerprint.js"
   },
   "keywords": [
     "pr-verification",
