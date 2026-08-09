@@ -18,12 +18,11 @@
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
-const { run, reportError } = require('../src/engine');
-const { runSpecSentinel } = require('../src/engine/sentinel');
-const { recordOutcome, fetchVerdicts } = require('../src/engine/log');
-const { computeMetrics, formatMetrics, OUTCOMES } = require('../src/engine/calibration');
-const { detectRevertedPRs } = require('../src/engine/outcomes');
-const { parseTarget, createGitHub } = require('../src/engine/github');
+// EVERY engine module is required lazily, inside the command that needs it. That is not style:
+// `felix preflight` claims to be incapable of touching the verdict store or the GitHub API, and
+// the honest form of that claim is that log.js and github.js are never loaded into the process at
+// all. Top-level requires would load them for every subcommand and reduce the claim to "we loaded
+// the code but promise not to call it". probe-preflight-containment.js asserts the strong version.
 const { logger } = require('../src/engine/util/logger');
 
 function parseArgs(argv) {
@@ -33,8 +32,11 @@ function parseArgs(argv) {
     if (a === '--post') { args.post = true; args.dryRun = false; }
     else if (a === '--dry-run') { args.dryRun = true; args.post = false; }
     else if (a === '--json') args.json = true;
+    else if (a === '--judge') args.judge = true;
     else if (a === '--repo-path') args.repoPath = argv[++i];
     else if (a === '--repo') args.repo = argv[++i];
+    else if (a === '--criteria') args.criteria = argv[++i];
+    else if (a === '--base') args.base = argv[++i];
     else if (a === '-h' || a === '--help') args.help = true;
     else args._.push(a);
   }
@@ -45,6 +47,7 @@ const HELP = `felix — behavioral PR verification
 
 Usage:
   felix <owner/repo#PR> [--post] [--repo-path <dir>] [--json]   verify a PR (default)
+  felix preflight [--judge] [--criteria <f>] [--base <ref>]     verify your WORKING TREE, no PR
   felix spec-sentinel <owner/repo#PR> [--post] [--json]         re-check the criteria pin only
   felix outcome <owner/repo#PR> <clean|defect>                  record a post-merge outcome
   felix scan-outcomes --repo <owner/repo> [--limit N]           auto-mark reverted PRs as defects
@@ -52,8 +55,13 @@ Usage:
 
 Examples:
   felix owner/repo#42 --post --repo-path .
+  felix preflight --judge
   felix outcome owner/repo#42 defect
   felix metrics --repo owner/repo
+
+Pre-flight runs Felix against your uncommitted working tree before a PR exists, so an agent can
+iterate locally instead of burning CI's one independent shot. It publishes NOTHING — no verdict
+row, no comment, no check run — and needs neither GITHUB_TOKEN nor any SUPABASE_* variable.
 `;
 
 /**
@@ -64,6 +72,7 @@ Examples:
  * reported on the check run, and reddening the job as well would train people to ignore it.
  */
 async function cmdSpecSentinel(args) {
+  const { runSpecSentinel } = require('../src/engine/sentinel');
   if (!args._[1]) {
     logger.err('usage: felix spec-sentinel <owner/repo#PR> [--post]');
     process.exit(1);
@@ -76,8 +85,34 @@ async function cmdSpecSentinel(args) {
   process.exit(result.conclusion === 'failure' ? 1 : 0);
 }
 
+/**
+ * felix preflight — verify the working tree, publish nothing.
+ *
+ * Exit codes mirror the PR path so a loop driver can branch on them without parsing: 0 clean
+ * (VERIFIED or SKIPPED), 1 NOT VERIFIED, 2 INSUFFICIENT EVIDENCE, 3 Felix itself failed. Whether
+ * a non-zero code is worth RETRYING is a different question, and the answer is `retryable` in
+ * --json — deliberately not encoded in the exit code, because "the tests failed" and "you have no
+ * acceptance criteria" are both exit 1 and only one of them is a loop's business to fix.
+ */
+async function cmdPreflight(args) {
+  const { runPreflight, formatPreflight } = require('../src/engine/preflight');
+  const result = await runPreflight({
+    repoPath: args.repoPath || process.cwd(),
+    criteriaPath: args.criteria,
+    base: args.base,
+    judge: args.judge,
+    env: process.env,
+  });
+  console.log(args.json ? JSON.stringify(result, null, 2) : formatPreflight(result));
+  process.exit(result.verdict === 'NOT VERIFIED' ? 1
+    : result.verdict === 'INSUFFICIENT EVIDENCE' ? 2 : 0);
+}
+
 /** felix outcome <target> <clean|defect> */
 async function cmdOutcome(args) {
+  const { recordOutcome } = require('../src/engine/log');
+  const { OUTCOMES } = require('../src/engine/calibration');
+  const { parseTarget } = require('../src/engine/github');
   const target = args._[1];
   const outcome = (args._[2] || '').toLowerCase();
   if (!target || ![OUTCOMES.CLEAN, OUTCOMES.DEFECT].includes(outcome)) {
@@ -92,6 +127,8 @@ async function cmdOutcome(args) {
 
 /** felix metrics [--repo owner/repo] */
 async function cmdMetrics(args) {
+  const { fetchVerdicts } = require('../src/engine/log');
+  const { computeMetrics, formatMetrics } = require('../src/engine/calibration');
   const rows = await fetchVerdicts({ repo: args.repo }, process.env);
   const m = computeMetrics(rows);
   console.log(args.json ? JSON.stringify(m, null, 2) : formatMetrics(m));
@@ -100,6 +137,10 @@ async function cmdMetrics(args) {
 
 /** felix scan-outcomes --repo owner/repo [--limit N] — auto-mark reverted PRs as defects */
 async function cmdScanOutcomes(args) {
+  const { recordOutcome } = require('../src/engine/log');
+  const { OUTCOMES } = require('../src/engine/calibration');
+  const { detectRevertedPRs } = require('../src/engine/outcomes');
+  const { createGitHub } = require('../src/engine/github');
   if (!args.repo || !args.repo.includes('/')) {
     logger.err('usage: felix scan-outcomes --repo <owner/repo> [--limit N]');
     process.exit(1);
@@ -125,11 +166,12 @@ async function main() {
   }
 
   // Subcommands (wrapped so a bad target reports cleanly, like the run path).
-  if (['outcome', 'metrics', 'scan-outcomes', 'spec-sentinel'].includes(args._[0])) {
+  if (['outcome', 'metrics', 'scan-outcomes', 'spec-sentinel', 'preflight'].includes(args._[0])) {
     try {
       if (args._[0] === 'outcome') return await cmdOutcome(args);
       if (args._[0] === 'metrics') return await cmdMetrics(args);
       if (args._[0] === 'spec-sentinel') return await cmdSpecSentinel(args);
+      if (args._[0] === 'preflight') return await cmdPreflight(args);
       return await cmdScanOutcomes(args);
     } catch (e) {
       logger.err(e.message);
@@ -139,6 +181,7 @@ async function main() {
   }
 
   const target = args._[0];
+  const { run, reportError } = require('../src/engine');
 
   try {
     const result = await run({

@@ -75,4 +75,56 @@ async function createSandbox({ repoPath, headSha, prNumber, rootDir, deps = {} }
   };
 }
 
-module.exports = { createSandbox };
+/**
+ * The LOCAL variant, for pre-flight. Same worktree, three deliberate differences.
+ *
+ * 1. NO FETCHES. createSandbox pulls `refs/pull/N/head` and the head SHA from origin because in
+ *    CI the commit may not be local yet. Pre-flight's commit was made from the working tree
+ *    thirty milliseconds ago by snapshot.js — it is definitionally local, there is no PR number
+ *    to fetch, and the two fetches above keep the PARENT environment for credential reasons that
+ *    pre-flight has no need to inherit. Dropping them removes the only network call and the only
+ *    place this function would touch a secret.
+ *
+ * 2. A DIFFERENT DIRECTORY NAMESPACE. `preflight-<sha8>` never collides with `pr-<N>-<sha8>`, so
+ *    a leftover pre-flight worktree can never be mistaken for — or removed by — a real run, and
+ *    the two can be in flight at once on the same clone.
+ *
+ * 3. It takes the commit directly instead of a PR number, because there is no PR.
+ *
+ * Everything else is shared on purpose: the same clean env (`git worktree add` fires the repo's
+ * post-checkout hook, which locally means husky and friends — silenced and secret-free), the same
+ * force-remove-then-add, the same teardown.
+ */
+async function createLocalSandbox({ repoPath, sha, rootDir, deps = {} }) {
+  const runFn = deps.run || run;
+  if (!fs.existsSync(path.join(repoPath, '.git'))) {
+    throw new Error(`${repoPath} is not a git repository (no .git).`);
+  }
+  const base = rootDir || path.join(repoPath, '.felix-worktrees');
+  fs.mkdirSync(base, { recursive: true });
+  const dir = path.join(base, `preflight-${sha.slice(0, 8)}`);
+  const cleanEnv = buildCleanEnv();
+
+  await runFn(`git worktree remove --force "${dir}" || true`, { cwd: repoPath, env: cleanEnv, timeoutMs: 60000 });
+  const add = await runFn(`git worktree add --detach --force "${dir}" ${sha}`, {
+    cwd: repoPath, env: cleanEnv, timeoutMs: 120000,
+  });
+  if (add.code !== 0) {
+    throw new Error(`git worktree add failed: ${add.combined.slice(-500)}`);
+  }
+  logger.debug(`preflight sandbox at ${dir}`);
+
+  return {
+    dir,
+    cleanEnv,
+    async teardown() {
+      try {
+        await runFn(`git worktree remove --force "${dir}"`, { cwd: repoPath, env: cleanEnv, timeoutMs: 60000 });
+      } catch (e) {
+        logger.warn(`sandbox teardown: ${e.message}`);
+      }
+    },
+  };
+}
+
+module.exports = { createSandbox, createLocalSandbox };

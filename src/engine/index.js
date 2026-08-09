@@ -7,11 +7,12 @@
  */
 
 const path = require('path');
-const picomatch = require('picomatch');
 const { version } = require('../../package.json');
 const { logger } = require('./util/logger');
 const { createGitHub, parseTarget } = require('./github');
 const { loadConfig, resolveWorkdir, CONFIG_FILENAME } = require('./config');
+// Shared with preflight.js so local and CI triage cannot drift apart — see triage.js.
+const { triageFiles, NEVER_SKIP } = require('./triage');
 const { buildSpec, linkedIssueNumbers, criteriaCapChars } = require('./spec');
 const { promptBudgetTokens } = require('./budget');
 const { PROVIDERS } = require('./providers');
@@ -29,40 +30,6 @@ const {
 const { render, renderError } = require('./comment');
 const { logVerdict, fetchPriorRuns } = require('./log');
 const { preloadOptional, armModuleLock } = require('./preload');
-
-/**
- * Felix's own control surface — never triaged away, whatever skipGlobs says.
- *
- * The default skipGlobs include a catch-all for JSON files and one for `.github`, which between
- * them match felix.config.json, package.json and the workflow that runs Felix. A PR touching only
- * those was therefore SKIPPED — never
- * verified — and merged. That is a two-step bypass of the base-ref policy split, because step one
- * poisons the ref step two trusts: PR 1 sets package.json's `scripts.test` to `exit 0` in a
- * chore-looking diff, and from then on every PR's Tier 1 test check passes trivially from BASE
- * content. Reproduced by execution — the default globs really do skip a config-only PR.
- *
- * Not configurable, deliberately: a list the config can suppress is not a floor. The cost is that
- * dependency-bump PRs now get fully verified instead of skipped, which is the right answer anyway
- * — a lockfile bump is behavioural.
- */
-const NEVER_SKIP = [
-  'felix.config.json',
-  '.github/workflows/**',
-  '**/package.json',
-];
-
-/** Triage: are all changed files non-behavioral (skipGlobs)? */
-function triageFiles(files, skipGlobs) {
-  const matchers = (skipGlobs || []).map((g) => picomatch(g));
-  const never = NEVER_SKIP.map((g) => picomatch(g));
-  const isSkip = (p) => !never.some((m) => m(p)) && matchers.some((m) => m(p));
-  const behavioral = files.filter((f) => !isSkip(f.filename));
-  return {
-    skipped: files.length > 0 && behavioral.length === 0,
-    reason: `${files.length} changed, ${behavioral.length} behavioral`,
-    behavioral,
-  };
-}
 
 /**
  * Read felix.config.json from the BASE ref over the contents API, not from the local checkout.

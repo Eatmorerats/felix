@@ -18,7 +18,8 @@
     "test:bypass": "node scripts/probe-insufficient-bypass.js",
     "test:induction": "node scripts/probe-judge-error-induction.js",
     "test:fingerprint": "node scripts/smoke-spec-fingerprint.js",
-    "test:sentinel": "node scripts/smoke-spec-sentinel.js"
+    "test:sentinel": "node scripts/smoke-spec-sentinel.js",
+    "test:preflight": "node scripts/probe-preflight-snapshot.js && node scripts/probe-preflight-containment.js"
   },
   "keywords": [
     "pr-verification",
