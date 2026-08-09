@@ -3564,6 +3564,109 @@ test('an oversized spec outranks the no_spec branch', () => {
   assert.strictEqual(v.cause, CAUSES.SPEC_TOO_LARGE);
 });
 
+// ── The spec freeze (spec_changed) and the judge attempt cap (attempts_exhausted) ────────────
+//
+// Both exist because Felix grades criteria the AUTHOR writes, with a judge that is not
+// deterministic. Neither hole needs an agent in the loop to be real: Felix never runs on
+// `pull_request: edited`, and nothing counts judge calls.
+
+const okSpec = (over = {}) => ({
+  hadRealSpec: true, size: { overLimit: false, renderedChars: 100, limitChars: 9999 },
+  total: 2, criteria: [{ text: 'a' }, { text: 'b' }], fingerprint: 'aaaa1111', ...over,
+});
+const drift = { changed: true, baseline: 'aaaa1111cafe', current: 'bbbb2222beef', respecLabel: 'felix-respec' };
+
+test('criteria that change after grading land on spec_changed, NOT VERIFIED', () => {
+  const v = compose({ spec: okSpec(), tier1: [], tier3: null, judgeStatus: {}, specDrift: drift });
+  assert.strictEqual(v.verdict, VERDICTS.NOT_VERIFIED);
+  assert.strictEqual(v.cause, CAUSES.SPEC_CHANGED);
+  assert.strictEqual(conclusionFor(v.verdict), 'failure', 'must be failure, never a passing neutral');
+});
+
+test('spec_changed names both relief valves, and the configured respec label', () => {
+  const v = compose({ spec: okSpec(), tier1: [], tier3: null, judgeStatus: {}, specDrift: drift });
+  const text = v.required_to_pass.join(' ');
+  assert.ok(/restore the previous criteria/i.test(text), 'must offer the free, human-free fix first');
+  assert.ok(text.includes('felix-respec'), 'must name the actual configured label, not a hardcoded one');
+});
+
+test('spec_changed is not exemptable — an adopter cannot configure a rewritten rubric to pass', () => {
+  assert.ok(!INSUFFICIENT_CAUSES.includes(CAUSES.SPEC_CHANGED),
+    'spec_changed must stay out of INSUFFICIENT_CAUSES or gating could exempt it');
+  assert.throws(
+    () => resolveGating({ gating: { insufficientExempt: ['spec_changed'] } }),
+    /unrecognized value/i);
+});
+
+test('spec_changed outranks a Tier 1 hard failure — drift cannot be masked by breaking a test', () => {
+  // Both are NOT VERIFIED, so ordering cannot open a lane. It decides the recorded CAUSE, and
+  // the cause is what the next run reads to know whether the spec moved.
+  const v = compose({
+    spec: okSpec(), tier1: [{ name: 'tests', hard: true, status: 'fail', detail: 'boom' }],
+    tier3: null, judgeStatus: {}, specDrift: drift,
+  });
+  assert.strictEqual(v.cause, CAUSES.SPEC_CHANGED);
+});
+
+test('spec_changed outranks attempts_exhausted — the rubric moving is the more specific fault', () => {
+  const v = compose({
+    spec: okSpec(), tier1: [], tier3: null, judgeStatus: {},
+    specDrift: drift, attempts: { exhausted: true, used: 10, limit: 10 },
+  });
+  assert.strictEqual(v.cause, CAUSES.SPEC_CHANGED);
+});
+
+test('no drift, or a first run with nothing pinned, does not fire spec_changed', () => {
+  for (const d of [undefined, null, { changed: false }, { changed: false, baseline: null }]) {
+    const v = compose({ spec: okSpec(), tier1: [], tier3: null, judgeStatus: { configured: false }, specDrift: d });
+    assert.notStrictEqual(v.cause, CAUSES.SPEC_CHANGED, `specDrift=${JSON.stringify(d)}`);
+  }
+});
+
+test('an exhausted judge budget lands on attempts_exhausted, NOT VERIFIED', () => {
+  const v = compose({
+    spec: okSpec(), tier1: [], tier3: null, judgeStatus: {},
+    attempts: { exhausted: true, used: 10, limit: 10 },
+  });
+  assert.strictEqual(v.verdict, VERDICTS.NOT_VERIFIED);
+  assert.strictEqual(v.cause, CAUSES.ATTEMPTS_EXHAUSTED);
+  assert.strictEqual(conclusionFor(v.verdict), 'failure');
+  assert.ok(v.required_to_pass.join(' ').includes('10'), 'must tell the author what the budget was');
+});
+
+test('attempts_exhausted is not exemptable — resampling cannot be configured back on', () => {
+  assert.ok(!INSUFFICIENT_CAUSES.includes(CAUSES.ATTEMPTS_EXHAUSTED));
+  assert.throws(
+    () => resolveGating({ gating: { insufficientExempt: ['attempts_exhausted'] } }),
+    /unrecognized value/i);
+});
+
+test('attempts_exhausted never fires while the PR still has budget', () => {
+  const v = compose({
+    spec: okSpec(), tier1: [], tier3: null, judgeStatus: { configured: false },
+    attempts: { exhausted: false, used: 3, limit: 10 },
+  });
+  assert.notStrictEqual(v.cause, CAUSES.ATTEMPTS_EXHAUSTED);
+});
+
+test('both new causes still yield to the maintainer override label', () => {
+  // Relief for a NOT VERIFIED verdict already exists via overrideLabel; these causes must not
+  // have accidentally become unappealable.
+  const g = resolveGating({ gating: { enabled: true, overrideLabel: 'felix-override' } });
+  for (const cause of [CAUSES.SPEC_CHANGED, CAUSES.ATTEMPTS_EXHAUSTED]) {
+    const d = gateDecision({ verdict: VERDICTS.NOT_VERIFIED, cause, gating: g, labels: ['felix-override'] });
+    assert.strictEqual(d.blocks, false, cause);
+    assert.strictEqual(d.overridden, true, cause);
+  }
+});
+
+test('both new causes block a gated repo by default', () => {
+  const g = resolveGating({ gating: { enabled: true } });
+  for (const cause of [CAUSES.SPEC_CHANGED, CAUSES.ATTEMPTS_EXHAUSTED]) {
+    assert.strictEqual(gateDecision({ verdict: VERDICTS.NOT_VERIFIED, cause, gating: g, labels: [] }).blocks, true, cause);
+  }
+});
+
 test('an honest monorepo spec keeps real headroom', () => {
   // 10 linked issues x 20 criteria x ~100 chars, far past anything Felix's own PRs carry. The
   // 60% assertion means lowering the fraction fails HERE rather than failing a contributor.

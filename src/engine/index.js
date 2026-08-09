@@ -302,10 +302,10 @@ async function run(opts) {
   const verdictObj = compose({ triage, spec, tier1, tier3, installFailed, judgeStatus, trigger: gate });
 
   return finalize({ gh, owner, repo, number, dryRun, post, started, meta, configSource, detected, env,
-    verdictObj, spec, tier1, tier3, diff, gating, labels });
+    verdictObj, spec, tier1, tier3, diff, gating, labels, judgeStatus });
 }
 
-async function finalize({ gh, owner, repo, number, dryRun, post, started, meta, configSource, detected, env, verdictObj, spec, tier1, tier3, gating, labels }) {
+async function finalize({ gh, owner, repo, number, dryRun, post, started, meta, configSource, detected, env, verdictObj, spec, tier1, tier3, gating, labels, judgeStatus }) {
   meta.durationMs = Date.now() - started;
   // `cause` is what lets an INSUFFICIENT EVIDENCE gate distinguish the lanes a PR can
   // drive (broken install, no criteria, fork, an induced judge error) from the one it
@@ -328,6 +328,20 @@ async function finalize({ gh, owner, repo, number, dryRun, post, started, meta, 
     repo: `${owner}/${repo}`, pr_number: number, pr_title: meta.prTitle,
     head_sha: meta.headSha, base_sha: meta.baseSha,
     verdict: verdictObj.verdict,
+    // The verdict is the label; the cause is the contract. gating.js keys its exemptions on
+    // the cause, and INSUFFICIENT EVIDENCE alone is six different situations — logging the
+    // verdict without the cause records which word was printed and discards which lane the PR
+    // actually drove. It is also what the freeze and the attempt cap read back on the next run.
+    cause: verdictObj.cause || null,
+    // Pinned ONLY by a run that had a real, gradeable spec. A fallback (PR-title) spec or an
+    // over-limit one was never put in front of the judge, so letting either become the baseline
+    // would pin criteria nobody was graded against — and would then flag the author's first
+    // legitimate attempt to write real criteria as drift.
+    spec_fingerprint: (spec && spec.hadRealSpec && spec.size && !spec.size.overLimit)
+      ? (spec.fingerprint || null)
+      : null,
+    // Charged per JUDGE CALL, not per run: a run that skipped the judge rolled no dice.
+    judge_attempted: Boolean(judgeStatus && judgeStatus.attempted),
     spec_source: spec ? spec.source : null,
     criteria_total: spec ? spec.total : 0,
     criteria_mapped: spec ? spec.mappedCount : 0,

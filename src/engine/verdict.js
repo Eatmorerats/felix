@@ -60,6 +60,41 @@
  *     to configure "a PR that makes itself unverifiable passes my gate". Listing it there
  *     would also create config that reads as a gate and can never fire, since gateDecision
  *     only consults the exemption list for INSUFFICIENT EVIDENCE.
+ *
+ * `spec_changed` and `attempts_exhausted` follow that same precedent exactly, for the same
+ * reason — both are NOT VERIFIED, and both are absent from INSUFFICIENT_CAUSES so no adopter
+ * can configure them exempt. They exist because the criteria Felix grades against are written
+ * by the PR author, in an artifact the author keeps write access to, and the judge that grades
+ * them is stochastic. Neither hole needs an autonomous agent to be real today:
+ *
+ *   spec_changed        Felix runs once per PUSH and never on `pull_request: edited`. So a PR
+ *                       can be graded VERIFIED against one criteria set and then merged
+ *                       displaying a different one — the check certifies a spec the reviewer
+ *                       never read. Wire an agent to `required_to_pass` and this stops being a
+ *                       door nobody walked through and becomes the CHEAPEST route to green:
+ *                       on "criterion not met", delete the criterion. spec.js pins a
+ *                       fingerprint of the graded set; any later drift lands here.
+ *
+ *                       Relief is deliberately two-tier and neither tier is head-reachable:
+ *                       revert the criteria (free, no human, hash matches again), or a
+ *                       maintainer applies the respec label, which is CONSUMED ON USE. A
+ *                       sticky label would be a standing "rewrite your own rubric" permit,
+ *                       which is the hole, not the fix.
+ *
+ *   attempts_exhausted  The judge is not deterministic, so re-running an UNCHANGED diff is a
+ *                       resampling attack: at a 10% per-run false-pass rate, seven rolls win
+ *                       more often than not. Today nothing counts, and a whitespace commit
+ *                       buys a fresh roll — so this is live without any loop, it is just slow
+ *                       enough by hand that nobody has bothered. The bound is on LIFETIME
+ *                       judge attempts per (repo, pr_number), enforced from the durable store
+ *                       BEFORE the spend, for the DAILY_JOB_CAP reason: an in-process counter
+ *                       is reset by pushing again, so it bounds nothing.
+ *
+ * Both are ordered ABOVE the Tier 1 hard-fail branch. Ordering cannot open a lane (every
+ * branch involved is NOT VERIFIED / `failure`), but it decides the DIAGNOSIS, and a spec that
+ * moved must not be reported as an ordinary unmet criterion just because a test also broke.
+ * The recorded cause is what the next run reads; letting it be masked would make the freeze
+ * unreliable exactly when someone is actively working around it.
  */
 
 const VERDICTS = {
@@ -79,6 +114,8 @@ const CAUSES = {
   INSTALL_FAILED: 'install_failed',
   NO_SPEC: 'no_spec',
   SPEC_TOO_LARGE: 'spec_too_large',
+  SPEC_CHANGED: 'spec_changed',
+  ATTEMPTS_EXHAUSTED: 'attempts_exhausted',
   CRITERIA_UNMET: 'criteria_unmet',
   FORK: 'fork',
   JUDGE_ERROR: 'judge_error',
@@ -97,7 +134,7 @@ const INSUFFICIENT_CAUSES = Object.freeze([
   CAUSES.JUDGE_UNAVAILABLE_UNKNOWN,
 ]);
 
-function compose({ triage, spec, tier1, tier3, installFailed, judgeStatus, trigger }) {
+function compose({ triage, spec, tier1, tier3, installFailed, judgeStatus, trigger, specDrift, attempts }) {
   const required = [];
 
   // 0. Draft PRs are deferred until marked ready.
@@ -151,6 +188,51 @@ function compose({ triage, spec, tier1, tier3, installFailed, judgeStatus, trigg
       cause: CAUSES.NO_SPEC,
       required_to_pass: ['Add acceptance criteria to the PR description or a linked issue so Felix can verify behavior.'],
       reason: 'no human spec found',
+    };
+  }
+
+  // 2c. The criteria moved after a grade was rendered against them.
+  //
+  // Above the Tier 1 branch on purpose — see the header. A moved spec reported as
+  // `criteria_unmet` would be indistinguishable in the log from an honest failing test, and
+  // the log is what the next run reads to decide whether the spec moved.
+  if (specDrift && specDrift.changed) {
+    const relief = specDrift.respecLabel
+      ? `restore the previous criteria (the fingerprint then matches again and grading resumes), or have a maintainer apply the "${specDrift.respecLabel}" label to re-baseline against the current set`
+      : 'restore the previous criteria (the fingerprint then matches again and grading resumes)';
+    return {
+      verdict: VERDICTS.NOT_VERIFIED,
+      cause: CAUSES.SPEC_CHANGED,
+      required_to_pass: [
+        'The acceptance criteria changed after Felix graded this PR against them. Felix pins the '
+        + 'criteria set the first time it grades one, because criteria live in the PR body and '
+        + 'editing away a failing criterion would otherwise be a cheaper route to a green check '
+        + 'than fixing the code. To proceed: ' + relief + '.'
+        + (specDrift.baseline && specDrift.current
+          ? ` Pinned ${specDrift.baseline.slice(0, 12)}, now ${specDrift.current.slice(0, 12)}.`
+          : ''),
+      ],
+      reason: 'acceptance criteria changed after grading',
+    };
+  }
+
+  // 2d. Out of judge attempts for this PR.
+  //
+  // The judge is stochastic, so an unbounded number of re-runs against an unchanged diff is a
+  // bypass by repetition. The count is lifetime-per-PR and read from the durable store, so a
+  // fresh push does not reset it.
+  if (attempts && attempts.exhausted) {
+    return {
+      verdict: VERDICTS.NOT_VERIFIED,
+      cause: CAUSES.ATTEMPTS_EXHAUSTED,
+      required_to_pass: [
+        `This PR has used all ${attempts.limit} of its cross-family judge attempts `
+        + `(${attempts.used} used). The judge is not deterministic, so Felix caps how many times `
+        + 'one PR may be graded — an unbounded retry is a way to obtain a green check by '
+        + 'repetition rather than by changing the code. A maintainer can override this verdict, '
+        + 'or split the remaining work into a new PR with its own budget.',
+      ],
+      reason: 'judge attempt budget exhausted',
     };
   }
 
