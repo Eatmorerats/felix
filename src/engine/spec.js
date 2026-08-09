@@ -108,9 +108,14 @@ const NUL = String.fromCharCode(0);
  *
  * Felix reads its criteria out of the PR body, the one artifact the PR author holds a pen over.
  * Without a pin, the cheapest response to "criterion not met" is to delete the criterion, and
- * that is not hypothetical even without an agent in the loop: Felix runs once per PUSH and
- * never on `pull_request: edited`, so a green check can be earned against one spec and merged
- * while displaying another. An autonomous fixer just finds that door faster than a person does.
+ * that is not hypothetical even without an agent in the loop — a green check can be earned
+ * against one spec and merged while displaying another. An autonomous fixer just finds that door
+ * faster than a person does.
+ *
+ * Re-running on the edit does NOT close it: a re-run with no pin re-grades whatever the body now
+ * says and can return an honest VERIFIED against the new set, with nothing recording that the set
+ * moved after a grade. Only a pin turns the change itself into the finding. See verdict.js's
+ * spec_changed note for the trigger coverage that remains open.
  *
  * Three properties are load-bearing:
  *   - it hashes the SAME array index.js hands the judge (`mapped[].text`), not the raw sources.

@@ -16,7 +16,61 @@ const BADGE = {
 
 const ICON = { pass: '✅', fail: '❌', skip: '⏭️' };
 
-function render({ verdict, spec, tier1, tier3, required_to_pass, meta, note }) {
+/** Short form of a spec fingerprint — long enough to be unambiguous, short enough to read. */
+const shortPin = (fp) => (fp ? String(fp).slice(0, 12) : '');
+
+/**
+ * Render what the freeze and the attempt cap did on this run, so a human can see WHICH criteria
+ * set was graded and how much of the PR's judge budget is gone — the two facts a green check
+ * silently depends on and that nothing else on the page shows.
+ *
+ * Every state is an icon PLUS a word ("🔒 frozen", "⚠️ CHANGED", "❓ not enforced"). Never an
+ * icon alone and never colour alone: the reader may be colour blind, and this block is the one
+ * place a reviewer looks to decide whether the criteria above are the ones Felix graded.
+ *
+ * Returns [] when there is nothing to say — a draft or triage-skipped run never reaches these
+ * controls, and inventing a reassuring "frozen" line for a run that never checked would be worse
+ * than silence.
+ */
+function renderFreeze(freeze) {
+  if (!freeze) return [];
+  const L = [];
+  const { pinned, drift, attempts, available, attempted } = freeze;
+
+  if (!available) {
+    // Said out loud rather than omitted. A missing line reads as "nothing to report"; this run
+    // genuinely did not enforce either control, and the reader is entitled to know that before
+    // trusting the verdict above.
+    L.push('**Spec pin:** ❓ not enforced — Felix could not read this PR\'s verdict history, '
+      + 'so the criteria freeze and the judge attempt cap did not run on this verdict.');
+  } else if (drift && drift.changed) {
+    L.push(`**Spec pin:** ⚠️ **CHANGED** — Felix first graded \`${shortPin(drift.baseline)}\`, `
+      + `this run reads \`${shortPin(drift.current)}\`. The criteria above are not the ones the `
+      + 'earlier verdict was rendered against.');
+  } else if (pinned && drift && drift.baseline) {
+    L.push(`**Spec pin:** 🔒 frozen \`${shortPin(pinned)}\` — unchanged since Felix first graded this PR.`);
+  } else if (pinned) {
+    L.push(`**Spec pin:** 📌 pinned \`${shortPin(pinned)}\` — first graded run; these criteria are now frozen.`);
+  } else {
+    L.push('**Spec pin:** — none. Felix only freezes criteria it can actually grade, so a '
+      + 'fallback or over-limit spec pins nothing.');
+  }
+
+  if (available && attempts) {
+    // `used` counts attempts BEFORE this run, so a run that spent one is run used+1 of the cap.
+    const n = attempts.used + (attempted ? 1 : 0);
+    L.push(attempts.exhausted
+      ? `**Judge budget:** ❌ exhausted — ${attempts.used} of ${attempts.limit} attempts used.`
+      : attempted
+        ? `**Judge budget:** ✅ judge run ${n} of ${attempts.limit}.`
+        : `**Judge budget:** ⏭️ judge not run — ${attempts.used} of ${attempts.limit} attempts used.`);
+  }
+
+  L.push('');
+  return L;
+}
+
+function render({ verdict, spec, tier1, tier3, required_to_pass, meta, note, freeze }) {
   const L = [];
   L.push(`## Felix — ${BADGE[verdict] || verdict}`);
   L.push('');
@@ -46,6 +100,9 @@ function render({ verdict, spec, tier1, tier3, required_to_pass, meta, note }) {
     L.push('**Spec:** none found.');
     L.push('');
   }
+
+  // The freeze + cap, directly under the criteria they qualify.
+  L.push(...renderFreeze(freeze));
 
   // Tier 1 checks.
   if (tier1 && tier1.length) {
@@ -96,4 +153,4 @@ function renderError({ error, meta }) {
   ].join('\n');
 }
 
-module.exports = { render, renderError, BADGE };
+module.exports = { render, renderError, renderFreeze, BADGE };

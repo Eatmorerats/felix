@@ -67,13 +67,28 @@
  * by the PR author, in an artifact the author keeps write access to, and the judge that grades
  * them is stochastic. Neither hole needs an autonomous agent to be real today:
  *
- *   spec_changed        Felix runs once per PUSH and never on `pull_request: edited`. So a PR
- *                       can be graded VERIFIED against one criteria set and then merged
+ *   spec_changed        A PR can be graded VERIFIED against one criteria set and then merged
  *                       displaying a different one — the check certifies a spec the reviewer
  *                       never read. Wire an agent to `required_to_pass` and this stops being a
  *                       door nobody walked through and becomes the CHEAPEST route to green:
  *                       on "criterion not met", delete the criterion. spec.js pins a
  *                       fingerprint of the graded set; any later drift lands here.
+ *
+ *                       RE-RUNNING IS NOT THE FIX, which is the part worth being precise about
+ *                       (an earlier version of this comment claimed Felix "never runs on
+ *                       `pull_request: edited`" — examples/felix.yml has listed `edited` since
+ *                       v1.0.0, so that was simply wrong). A re-run without a pin re-grades the
+ *                       NEW criteria and can honestly return VERIFIED against them; nothing
+ *                       anywhere records that the set moved after a grade. The pin is what makes
+ *                       the CHANGE ITSELF the finding rather than a silent re-baseline.
+ *
+ *                       Two ways the trigger misses entirely, both real and neither fixable from
+ *                       inside the engine: an adopter whose workflow omits `edited` gets no run
+ *                       at all on a body edit, so the pin waits for the next push; and criteria
+ *                       may live in a LINKED ISSUE, which buildSpec folds into the graded set
+ *                       and which fires no pull_request event under any workflow config. The
+ *                       `pull_request: edited` sentinel workflow covers the first; the second is
+ *                       documented, not closed.
  *
  *                       Relief is deliberately two-tier and neither tier is head-reachable:
  *                       revert the criteria (free, no human, hash matches again), or a

@@ -23,8 +23,11 @@ const { run: execRun } = require('./util/exec');
 const { createJudge } = require('./judge');
 const { compose, conclusionFor } = require('./verdict');
 const { resolveGating, gateDecision } = require('./gating');
+const {
+  resolveFreeze, pinnableFingerprint, decideSpecDrift, decideAttempts, refuseOnUnprovenFreeze,
+} = require('./freeze');
 const { render, renderError } = require('./comment');
-const { logVerdict } = require('./log');
+const { logVerdict, fetchPriorRuns } = require('./log');
 const { preloadOptional, armModuleLock } = require('./preload');
 
 /**
@@ -116,6 +119,75 @@ function triggerGate(pr) {
   const fork = Boolean(head && head.fork)
     || Boolean(head && base && head.full_name && base.full_name && head.full_name !== base.full_name);
   return { draft: Boolean(pr && pr.draft), fork };
+}
+
+/**
+ * May the cross-family judge be called on this run?
+ *
+ * Extracted from the inline conjunction it used to be so it can be unit-tested and MUTATED. Each
+ * clause here is a decision not to spend, and an inline `&&` chain inside run() is unreachable
+ * from a test without a live sandbox — which is how a clause gets dropped and nobody notices.
+ *
+ *   hadRealSpec / !overLimit  nothing gradeable, or a spec runSeat is guaranteed to refuse.
+ *   !installFailed            the code never ran, so there is nothing to judge.
+ *   !fork                     the judge secret is not exposed to fork PRs.
+ *   !specDrift.changed        the verdict is already spec_changed. Skipping is not an
+ *   !attempts.exhausted       optimization: a call here would still be LOGGED as an attempt, so
+ *                             a PR whose budget is gone would keep burning budget, and a rubric
+ *                             Felix refused would still be paid to grade. A cap that spends on
+ *                             the run enforcing it is not a cap.
+ */
+function shouldRunJudge({ spec, installFailed, fork, specDrift, attempts }) {
+  if (!spec || !spec.hadRealSpec) return false;
+  if (!spec.size || spec.size.overLimit) return false;
+  if (installFailed || fork) return false;
+  if (specDrift && specDrift.changed) return false;
+  if (attempts && attempts.exhausted) return false;
+  return true;
+}
+
+/**
+ * Publish a FAILING check run for a refusal, then let the caller throw.
+ *
+ * Throwing alone is NOT fail-closed here, and this is the difference between the freeze working
+ * and the freeze being decorative. A check run persists on its head SHA until something PATCHes
+ * it, and `createCheckRun` upserts by (SHA, name) — so a run that throws never touches the one
+ * already there. The attack that writes itself:
+ *
+ *   1. PR is graded VERIFIED on sha X while the store is healthy → a `success` check run exists.
+ *   2. The author edits the acceptance criteria. `pull_request: edited` fires on the SAME sha X.
+ *   3. The store is now unreachable, so the refusal fires and Felix exits.
+ *   4. Nothing PATCHed the check run, so the green from step 1 still stands — and it certifies a
+ *      criteria set that is no longer the one on the page.
+ *
+ * That is exactly the drift the freeze exists to catch, surviving BECAUSE of the guard meant to
+ * catch it. So write the red first. It is best-effort — a failure here still exits — and the
+ * residual is narrow: a stale green survives only if the verdict store AND checks:write are both
+ * down at once.
+ *
+ * assertJailCoherent above throws bare and that remains correct: it fires on incoherent config,
+ * which has no reason to coincide with "a green already exists on this SHA". This refusal fires
+ * PREFERENTIALLY on re-runs of an already-graded SHA, because that is what an `edited` event is.
+ *
+ * Deliberately NOT routed through compose(): every verdict reachable from here is one Felix maps
+ * to `neutral`, and GitHub counts `neutral` as PASSING.
+ */
+async function publishRefusal({ gh, owner, repo, headSha, reason, post, dryRun, env }) {
+  if (!post || dryRun || env.FELIX_CHECK_RUN === 'false' || !headSha) return false;
+  try {
+    await gh.createCheckRun(owner, repo, {
+      headSha,
+      conclusion: 'failure',
+      title: 'Felix: NOT VERIFIED — verdict store unavailable',
+      summary: `## Felix — ❌ **NOT VERIFIED**\n\n${reason}`,
+    });
+    return true;
+  } catch (e) {
+    // Still exit non-zero. Say it out loud, because this is the one path where a stale green can
+    // survive, and the operator needs to know the check on this SHA may be lying.
+    logger.warn(`could not publish the refusal check run (a stale check on ${String(headSha).slice(0, 7)} may still show green): ${e.message}`);
+    return false;
+  }
 }
 
 /**
@@ -223,6 +295,57 @@ async function run(opts) {
     );
   }
 
+  // (4b) The spec freeze and the judge attempt cap.
+  //
+  // HERE, and not later, for the same reason DAILY_JOB_CAP is enforced before the spend rather
+  // than after it: both controls answer "may this PR be graded at all", and a control consulted
+  // after the money is gone is a report, not a cap. Everything below this line either runs PR
+  // code or bills a judge call.
+  //
+  // Both answers come from the DURABLE store (fetchPriorRuns), never from this process. An
+  // in-process counter is reset by pushing again, and an in-process fingerprint has nothing to
+  // compare against — the whole point is that the PR body can change between runs.
+  const freeze = resolveFreeze(config);
+  const prior = await fetchPriorRuns({ repo: `${owner}/${repo}`, prNumber: number }, env);
+  // The fingerprint this run may be judged against IS the one it would pin — one function, so
+  // the comparison and the recorded baseline cannot drift apart. See freeze.js.
+  const pinned = pinnableFingerprint(spec);
+  // Fail-closed when the store did not answer. This deliberately overrides log.js's "logging
+  // must never block a verdict" contract, and freeze.js documents exactly why: these two are not
+  // features computed from the log, they ARE the log. Throwing (rather than composing a verdict)
+  // because every verdict reachable from here is one GitHub may count as passing — INSUFFICIENT
+  // EVIDENCE maps to `neutral`, which passes a Required check. A throw never reaches finalize(),
+  // so no check run is created. Same shape as assertJailCoherent above.
+  const refusal = refuseOnUnprovenFreeze({
+    available: prior.available,
+    gating,
+    labels,
+    // Both controls guard against laundering a PASS. A run that cannot reach VERIFIED — fork, no
+    // real spec, over-limit spec — has no pass to launder, and `pinned` is already exactly the
+    // "real and gradeable" test.
+    couldReachVerified: Boolean(pinned) && !gate.fork,
+    storeReason: prior.reason,
+  });
+  if (refusal.refuse) {
+    await publishRefusal({ gh, owner, repo, headSha, reason: refusal.reason, post, dryRun, env });
+    throw new Error(refusal.reason);
+  }
+  if (!prior.available) {
+    logger.warn(`spec freeze + attempt cap are UNPROVEN (${prior.reason || 'store unavailable'}) — ${refusal.reason}`);
+  }
+  const specDrift = decideSpecDrift({ current: pinned, baseline: prior.baselineFingerprint });
+  const attempts = decideAttempts({ used: prior.judgeAttempts, limit: freeze.maxJudgeRuns });
+  if (specDrift.changed) {
+    logger.warn(
+      `spec changed after grading: pinned ${String(specDrift.baseline).slice(0, 12)}, `
+      + `now ${String(specDrift.current).slice(0, 12)} — the judge is skipped and the verdict blocks (spec_changed).`
+    );
+  } else if (attempts.exhausted) {
+    logger.warn(`judge attempts exhausted: ${attempts.used}/${attempts.limit} — the judge is skipped (attempts_exhausted).`);
+  } else if (prior.available) {
+    logger.info(`judge budget: attempt ${attempts.used + 1} of ${attempts.limit}${pinned ? ` · spec pin ${pinned.slice(0, 12)}` : ''}`);
+  }
+
   // (5) Sandbox.
   logger.step(5, 'preparing sandbox');
   let sandbox;
@@ -270,7 +393,8 @@ async function run(opts) {
     // exceeds the seat budget. The verdict is decided either way — spec_too_large blocks —
     // so firing it would buy an identical red check minus the diagnosis, plus the CI minutes.
     // Falling to the else still runs createJudge, so the cross-family guard is not skipped.
-    if (spec.hadRealSpec && !spec.size.overLimit && !installFailed && !gate.fork) {
+    // The full set of reasons NOT to spend lives in shouldRunJudge() above, where it is testable.
+    if (shouldRunJudge({ spec, installFailed, fork: gate.fork, specDrift, attempts })) {
       logger.step(7, 'cross-family judge');
       // Opt-in adversarial "refute-first" judging (R2a): per-repo config.judge.adversarial,
       // or the FELIX_JUDGE_ADVERSARIAL env for a global/Action toggle. Default off.
@@ -299,13 +423,16 @@ async function run(opts) {
 
   // (8) Verdict.
   logger.step(8, 'composing verdict');
-  const verdictObj = compose({ triage, spec, tier1, tier3, installFailed, judgeStatus, trigger: gate });
+  const verdictObj = compose({ triage, spec, tier1, tier3, installFailed, judgeStatus, trigger: gate, specDrift, attempts });
 
   return finalize({ gh, owner, repo, number, dryRun, post, started, meta, configSource, detected, env,
-    verdictObj, spec, tier1, tier3, diff, gating, labels, judgeStatus });
+    verdictObj, spec, tier1, tier3, diff, gating, labels, judgeStatus,
+    // `attempted` is folded in so the comment can say "run k of N" counting THIS run, without
+    // re-deriving from a judgeStatus the renderer would otherwise have to interpret.
+    freezeState: { pinned, drift: specDrift, attempts, available: prior.available, attempted: judgeStatus.attempted } });
 }
 
-async function finalize({ gh, owner, repo, number, dryRun, post, started, meta, configSource, detected, env, verdictObj, spec, tier1, tier3, gating, labels, judgeStatus }) {
+async function finalize({ gh, owner, repo, number, dryRun, post, started, meta, configSource, detected, env, verdictObj, spec, tier1, tier3, gating, labels, judgeStatus, freezeState }) {
   meta.durationMs = Date.now() - started;
   // `cause` is what lets an INSUFFICIENT EVIDENCE gate distinguish the lanes a PR can
   // drive (broken install, no criteria, fork, an induced judge error) from the one it
@@ -315,7 +442,7 @@ async function finalize({ gh, owner, repo, number, dryRun, post, started, meta, 
   const note = verdictObj.verdict === 'SKIPPED' ? verdictObj.reason : undefined;
   let body = render({
     verdict: verdictObj.verdict, spec, tier1, tier3,
-    required_to_pass: verdictObj.required_to_pass, meta, note,
+    required_to_pass: verdictObj.required_to_pass, meta, note, freeze: freezeState,
   });
   if (gateResult.blocks) {
     body += '\n\n> 🚫 **Gating:** this verdict is configured to block — it blocks merge when the "Felix verdict" check is marked Required in branch protection.';
@@ -324,6 +451,15 @@ async function finalize({ gh, owner, repo, number, dryRun, post, started, meta, 
   }
 
   // (9) Log + report.
+  //
+  // ORDER IS LOAD-BEARING: the log is awaited BEFORE the check run is created below, and the
+  // attempt cap depends on it. `judge_attempted` is what the next run counts, so any green an
+  // attacker could harvest must already have charged the budget. Post the check first and a run
+  // that dies in between publishes a passing check while its judge roll goes unrecorded — free
+  // re-rolls, which is the whole thing the cap exists to stop. A crash BEFORE this line loses the
+  // attempt too, but it also produces no check run and no comment, so it advances nothing.
+  //
+  // Do not "optimize" this by posting the verdict first or by not awaiting. A test pins it.
   await logVerdict({
     repo: `${owner}/${repo}`, pr_number: number, pr_title: meta.prTitle,
     head_sha: meta.headSha, base_sha: meta.baseSha,
@@ -333,13 +469,12 @@ async function finalize({ gh, owner, repo, number, dryRun, post, started, meta, 
     // verdict without the cause records which word was printed and discards which lane the PR
     // actually drove. It is also what the freeze and the attempt cap read back on the next run.
     cause: verdictObj.cause || null,
-    // Pinned ONLY by a run that had a real, gradeable spec. A fallback (PR-title) spec or an
-    // over-limit one was never put in front of the judge, so letting either become the baseline
-    // would pin criteria nobody was graded against — and would then flag the author's first
-    // legitimate attempt to write real criteria as drift.
-    spec_fingerprint: (spec && spec.hadRealSpec && spec.size && !spec.size.overLimit)
-      ? (spec.fingerprint || null)
-      : null,
+    // Pinned ONLY by a run that had a real, gradeable spec — pinnableFingerprint() is the same
+    // call the drift comparison made at step 4b, deliberately shared so what gets RECORDED and
+    // what gets COMPARED can never disagree. A fallback (PR-title) or over-limit spec was never
+    // put in front of the judge, so letting either become the baseline would pin criteria nobody
+    // was graded against, and would then flag the author's first real criteria as drift.
+    spec_fingerprint: pinnableFingerprint(spec),
     // Charged per JUDGE CALL, not per run: a run that skipped the judge rolled no dice.
     judge_attempted: Boolean(judgeStatus && judgeStatus.attempted),
     spec_source: spec ? spec.source : null,
@@ -412,4 +547,4 @@ async function reportError({ target, env = process.env, error }) {
   }
 }
 
-module.exports = { run, triageFiles, triggerGate, reportError, baseConfigFetcher, NEVER_SKIP };
+module.exports = { run, triageFiles, triggerGate, reportError, baseConfigFetcher, shouldRunJudge, NEVER_SKIP };
