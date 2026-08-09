@@ -58,7 +58,7 @@ function fakeJudge(ruling) {
   return factory;
 }
 
-const ENV = { OPENAI_API_KEY: 'smoke-not-a-real-key' };
+const ENV = { OPENAI_API_KEY: 'smoke-' + 'not-a-real-' + 'key' }; // split: see probe-preflight-containment.js
 const dirs = [];
 const repo = (o) => { const d = makeRepo(o); dirs.push(d); return d; };
 
