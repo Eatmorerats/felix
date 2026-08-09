@@ -19,6 +19,7 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
 const { run, reportError } = require('../src/engine');
+const { runSpecSentinel } = require('../src/engine/sentinel');
 const { recordOutcome, fetchVerdicts } = require('../src/engine/log');
 const { computeMetrics, formatMetrics, OUTCOMES } = require('../src/engine/calibration');
 const { detectRevertedPRs } = require('../src/engine/outcomes');
@@ -44,6 +45,7 @@ const HELP = `felix — behavioral PR verification
 
 Usage:
   felix <owner/repo#PR> [--post] [--repo-path <dir>] [--json]   verify a PR (default)
+  felix spec-sentinel <owner/repo#PR> [--post] [--json]         re-check the criteria pin only
   felix outcome <owner/repo#PR> <clean|defect>                  record a post-merge outcome
   felix scan-outcomes --repo <owner/repo> [--limit N]           auto-mark reverted PRs as defects
   felix metrics [--repo <owner/repo>] [--json]                  print calibration metrics
@@ -53,6 +55,26 @@ Examples:
   felix outcome owner/repo#42 defect
   felix metrics --repo owner/repo
 `;
+
+/**
+ * felix spec-sentinel <target> — recompute the criteria fingerprint and nothing else.
+ *
+ * Exit 1 on drift so the job is red even for an adopter who marked the WORKFLOW required rather
+ * than the check run. Exit 0 for every other state, including "not enforced": a store outage is
+ * reported on the check run, and reddening the job as well would train people to ignore it.
+ */
+async function cmdSpecSentinel(args) {
+  if (!args._[1]) {
+    logger.err('usage: felix spec-sentinel <owner/repo#PR> [--post]');
+    process.exit(1);
+  }
+  const result = await runSpecSentinel({
+    target: args._[1], dryRun: args.dryRun, post: args.post, env: process.env,
+  });
+  if (args.json) console.log(JSON.stringify(result, null, 2));
+  else console.log(`\n${result.title}\n`);
+  process.exit(result.conclusion === 'failure' ? 1 : 0);
+}
 
 /** felix outcome <target> <clean|defect> */
 async function cmdOutcome(args) {
@@ -103,10 +125,11 @@ async function main() {
   }
 
   // Subcommands (wrapped so a bad target reports cleanly, like the run path).
-  if (['outcome', 'metrics', 'scan-outcomes'].includes(args._[0])) {
+  if (['outcome', 'metrics', 'scan-outcomes', 'spec-sentinel'].includes(args._[0])) {
     try {
       if (args._[0] === 'outcome') return await cmdOutcome(args);
       if (args._[0] === 'metrics') return await cmdMetrics(args);
+      if (args._[0] === 'spec-sentinel') return await cmdSpecSentinel(args);
       return await cmdScanOutcomes(args);
     } catch (e) {
       logger.err(e.message);

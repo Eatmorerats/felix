@@ -17,7 +17,8 @@
     "test:deps": "node test/deps-live.js",
     "test:bypass": "node scripts/probe-insufficient-bypass.js",
     "test:induction": "node scripts/probe-judge-error-induction.js",
-    "test:fingerprint": "node scripts/smoke-spec-fingerprint.js"
+    "test:fingerprint": "node scripts/smoke-spec-fingerprint.js",
+    "test:sentinel": "node scripts/smoke-spec-sentinel.js"
   },
   "keywords": [
     "pr-verification",

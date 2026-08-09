@@ -4007,6 +4007,101 @@ test('the freeze block lands in the rendered comment, under the criteria it qual
   assert.ok(!plain.includes('Spec pin:'));
 });
 
+// ── The pull_request:edited sentinel ─────────────────────────────────────────────────────────
+
+console.log('spec pin sentinel (sentinel.js)');
+
+const { decide: sentinelDecide, CHECK_NAME } = require('../src/engine/sentinel');
+const sentinelGating = { enabled: true, blockOn: ['NOT VERIFIED'], overrideLabel: 'felix-override' };
+const upStore = (baselineFingerprint) => ({ available: true, baselineFingerprint, judgeAttempts: 0, reason: null });
+
+test('the sentinel writes its OWN check, never the verdict check', () => {
+  // Sharing the name would let the sentinel overwrite a verdict it did not make, and would leave
+  // a reverted PR stuck red — after a revert there is no drift, so nothing would be written.
+  assert.strictEqual(CHECK_NAME, 'Felix spec pin');
+  assert.notStrictEqual(CHECK_NAME, 'Felix verdict');
+});
+
+test('criteria that moved after grading fail the pin check', () => {
+  const r = sentinelDecide({ current: 'bbbb2222beef99', prior: upStore('aaaa1111cafe77'), gating: sentinelGating, labels: [] });
+  assert.strictEqual(r.state, 'changed');
+  assert.strictEqual(r.conclusion, 'failure', 'never neutral — GitHub counts neutral as passing');
+  assert.ok(r.summary.includes('aaaa1111cafe') && r.summary.includes('bbbb2222beef'), 'show both hashes');
+  assert.ok(/restore the previous criteria/i.test(r.summary), 'the free relief valve comes first');
+  assert.ok(r.summary.includes('felix-override'), 'and it names the configured maintainer label');
+});
+
+test('an unchanged pin passes, and so does a PR nothing has graded yet', () => {
+  const held = sentinelDecide({ current: 'aaaa1111cafe77', prior: upStore('aaaa1111cafe77'), gating: sentinelGating, labels: [] });
+  assert.strictEqual(held.state, 'held');
+  assert.strictEqual(held.conclusion, 'success');
+  const first = sentinelDecide({ current: 'aaaa1111cafe77', prior: upStore(null), gating: sentinelGating, labels: [] });
+  assert.strictEqual(first.state, 'first');
+  assert.strictEqual(first.conclusion, 'success', 'nothing pinned yet is not a violation');
+});
+
+test('restoring the criteria clears the check with no push and no human', () => {
+  // The whole reason the sentinel does not share the verdict check's name: this transition has to
+  // be able to go back to green on its own.
+  const drifted = sentinelDecide({ current: 'bbbb2222beef99', prior: upStore('aaaa1111cafe77'), gating: sentinelGating, labels: [] });
+  const restored = sentinelDecide({ current: 'aaaa1111cafe77', prior: upStore('aaaa1111cafe77'), gating: sentinelGating, labels: [] });
+  assert.strictEqual(drifted.conclusion, 'failure');
+  assert.strictEqual(restored.conclusion, 'success');
+});
+
+test('a PR with nothing gradeable passes the pin check instead of reporting the same fault twice', () => {
+  const r = sentinelDecide({ current: null, prior: upStore(null), gating: sentinelGating, labels: [] });
+  assert.strictEqual(r.state, 'unpinnable');
+  assert.strictEqual(r.conclusion, 'success', 'no_spec is the verdict check\'s job; a second red trains people to ignore this one');
+});
+
+test('the sentinel fails closed on a down store under gating, and mirrors the pipeline exactly', () => {
+  const down = { available: false, baselineFingerprint: null, judgeAttempts: 0, reason: 'connection refused' };
+  const gated = sentinelDecide({ current: 'aaaa1111cafe77', prior: down, gating: sentinelGating, labels: [] });
+  assert.strictEqual(gated.conclusion, 'failure');
+  assert.ok(gated.summary.includes('connection refused'));
+  // Advisory: reported, not blocking. Same predicate, same answer as index.js.
+  const advisory = sentinelDecide({ current: 'aaaa1111cafe77', prior: down, gating: { enabled: false }, labels: [] });
+  assert.strictEqual(advisory.conclusion, 'neutral');
+  assert.ok(/not enforced/i.test(advisory.title));
+  // And the same escape hatch.
+  const overridden = sentinelDecide({ current: 'aaaa1111cafe77', prior: down, gating: sentinelGating, labels: ['felix-override'] });
+  assert.strictEqual(overridden.conclusion, 'neutral');
+  // Nothing to protect ⇒ no refusal, exactly as in the pipeline.
+  assert.strictEqual(sentinelDecide({ current: null, prior: down, gating: sentinelGating, labels: [] }).conclusion, 'neutral');
+});
+
+test('every sentinel state carries its meaning in words, not only in an icon', () => {
+  const cases = [
+    { current: 'aa', prior: upStore('bb') }, { current: 'aa', prior: upStore('aa') },
+    { current: 'aa', prior: upStore(null) }, { current: null, prior: upStore(null) },
+    { current: 'aa', prior: { available: false, baselineFingerprint: null, judgeAttempts: 0, reason: 'x' } },
+  ];
+  for (const c of cases) {
+    const r = sentinelDecide({ ...c, gating: sentinelGating, labels: [] });
+    const deIconed = r.title.replace(/[^\x00-\x7F]/g, '').trim();
+    assert.ok(/[a-z]{3}/i.test(deIconed) && deIconed.split(/\s+/).length >= 3,
+      `a colour-blind reader must get the state from the title: "${deIconed}"`);
+  }
+});
+
+test('the sentinel hashes the same set the pipeline does, without fetching the changed files', () => {
+  // This is what lets the sentinel skip getFiles entirely, so it is asserted rather than assumed.
+  // buildSpec uses the file list ONLY to compute mappedFiles, and specFingerprint hashes
+  // mapped[].text — which file mapping never touches.
+  const pr = { title: 'x', body: '## Acceptance criteria\n- [ ] POST /api/spec returns 201\n- [ ] it logs the id\n' };
+  const issues = [{ number: 7, body: '## Requirements\n- [ ] the widget renders on mobile\n' }];
+  const withFiles = buildSpec(pr, issues, [
+    { filename: 'src/spec/handler.js' }, { filename: 'src/widget.js' }, { filename: 'test/id.test.js' },
+  ]);
+  const withoutFiles = buildSpec(pr, issues, []);
+  assert.strictEqual(withoutFiles.fingerprint, withFiles.fingerprint,
+    'the sentinel would compare a different hash to the pipeline and flag drift on every edit');
+  assert.ok(withFiles.mappedCount > 0 && withoutFiles.mappedCount === 0,
+    'the mapping really does differ — so this is a claim about the FINGERPRINT, not about buildSpec being inert');
+  assert.strictEqual(withoutFiles.hadRealSpec, withFiles.hadRealSpec, 'and pinnability agrees too');
+});
+
 test('an honest monorepo spec keeps real headroom', () => {
   // 10 linked issues x 20 criteria x ~100 chars, far past anything Felix's own PRs carry. The
   // 60% assertion means lowering the fraction fails HERE rather than failing a contributor.

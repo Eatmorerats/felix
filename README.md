@@ -135,10 +135,15 @@ automatically (node/python/go/rust) or reads a `felix.config.json` at your root.
 A ready-to-copy template lives at [`examples/felix.yml`](./examples/felix.yml).
 Pin to a tag/SHA instead of `@main` for stability.
 
-**Action inputs:** `judge-family` (`openai` default / `gemini`), `openai-api-key`
-**or** `gemini-api-key` (set the one matching `judge-family`), `github-token`,
-`judge-model`, `supabase-url`, `supabase-service-role-key`, `repo-path`, `post`,
+**Action inputs:** `mode` (`verify` default / `spec-sentinel`), `judge-family` (`openai` default
+/ `gemini`), `openai-api-key` **or** `gemini-api-key` (set the one matching `judge-family`),
+`github-token`, `judge-model`, `supabase-url`, `supabase-service-role-key`, `repo-path`, `post`,
 `node-version` — see [`action.yml`](./action.yml).
+
+If you turn gating on, add the second workflow too —
+[`examples/felix-spec-sentinel.yml`](./examples/felix-spec-sentinel.yml) re-checks the
+acceptance-criteria pin when the PR description is edited, without re-running the pipeline. See
+[the criteria freeze](#the-criteria-freeze-and-the-judge-attempt-cap).
 
 To run Felix on this repo's own PRs, add a `.github/workflows/felix.yml` — see [`examples/felix.yml`](examples/felix.yml).
 
@@ -224,6 +229,70 @@ values in either array are a **hard config error** — previously a typo like
 not dead code, reached whenever the judge yields no result and none of the named reasons
 applies. It blocks, so a state nobody anticipated costs a red check and a bug report rather
 than a quiet green.
+
+### The criteria freeze and the judge attempt cap
+
+Felix grades criteria the **author** writes, in the PR description, using a judge that is **not
+deterministic**. A green check therefore says "*this* set was met, *once*" — and both of those
+words need pinning. Two `NOT VERIFIED` causes do it, and neither can be added to
+`insufficientExempt`: nobody should be able to configure "a PR that rewrites its own rubric
+passes my gate".
+
+| cause | what it catches | relief |
+| --- | --- | --- |
+| `spec_changed` | the acceptance criteria moved after Felix graded them | put the criteria back — the hash matches again and grading resumes, no push and no human. Or the maintainer `overrideLabel`. |
+| `attempts_exhausted` | the PR has used all `judge.maxJudgeRuns` (default 10) lifetime judge calls | maintainer `overrideLabel`, or split the remaining work into a new PR with its own budget |
+
+The pin is a SHA-256 of the deduped, normalised, **sorted** criteria texts, so reordering bullets
+is free and any add, delete or reword trips it. No algorithm can tell a typo fix from a
+weakening, so both trip it and both route through the relief valve above — that is the intended
+trade, not a gap. The baseline is the **earliest** fingerprint recorded for the PR, so a drifted
+spec cannot re-pin itself just by being logged. The attempt count is **lifetime per PR**, read
+from the verdict log before the spend, so pushing again does not buy a fresh roll of the dice.
+
+**Both require the verdict log** (`SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`) — they are not
+features computed from the log, they *are* the log. So when the store does not answer:
+
+- **advisory** (the default): Felix warns, says "❓ not enforced" on the comment, and proceeds.
+  Nothing it reports can block a merge, so an unproven control changes no outcome.
+- **`gating.enabled: true`**: Felix **refuses** — it publishes a `failure` check run and exits
+  non-zero rather than a verdict that silently rests on two checks that did not run. **This is a
+  behaviour change: a gated repo with no verdict store will refuse every non-fork PR that has real
+  criteria.** Set the two secrets, or apply the `overrideLabel`.
+
+Two limits worth knowing, neither hidden:
+
+- `gating.enabled` is a **proxy** for "the Felix checks are marked Required in branch protection",
+  and the two can disagree. If you mark the checks Required but leave `gating.enabled` false, you
+  forfeit the store-outage refusal above.
+- Criteria may live in a **linked issue**, and editing an issue fires no pull-request event at
+  all. Nothing re-checks the pin until the next run on that PR.
+
+#### Re-checking the pin when the description is edited
+
+The freeze only fires when Felix runs, and Felix runs on the events *your* workflow lists. A
+workflow that omits `edited` sees nothing when the body changes — and "edit the criteria after
+the final green, then merge" needs no push. Adding `edited` to the main workflow works, but pays
+for a full checkout, install and test suite on every typo fix, which is why people trim it.
+
+[`examples/felix-spec-sentinel.yml`](./examples/felix-spec-sentinel.yml) is the cheap version. It
+recomputes **only** the fingerprint from the PR body and its linked issues, and publishes its own
+check run:
+
+| | |
+| --- | --- |
+| 🔒 **frozen** | unchanged since Felix graded it |
+| 📌 **not pinned** | Felix has not graded these criteria yet |
+| ⚠️ **CHANGED** | the criteria moved. Restore them and this goes green on its own. |
+
+It checks out nothing, installs nothing, runs no PR code and never calls the judge — which is
+what makes `pull_request_target` (needed so the sentinel also works on fork PRs) safe here.
+`scripts/smoke-spec-sentinel.js` asserts that against the actual request log; it runs in CI.
+
+It deliberately does **not** write the `Felix verdict` check: sharing the name would let the
+sentinel overwrite a verdict it did not make, and after a revert there would be no drift and so
+nothing to write — leaving the verdict stuck red until someone pushed. **If you gate on Felix,
+mark both `Felix verdict` and `Felix spec pin` Required.**
 
 ### Driving the app (opt-in)
 
