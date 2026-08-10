@@ -102,13 +102,50 @@ function scratchDirFor(repoRoot) {
  * configurable stance and there is no flag for it here.
  *
  * `judge_error` and `judge_unconfigured` are terminal for a duller reason — retrying them just
- * re-buys the same failure — and `spec_changed` / `attempts_exhausted` cannot occur locally at
- * all, since neither control has a durable store to read.
+ * re-buys the same failure.
+ *
+ * `attempts_exhausted` still cannot occur locally: it means "lifetime cross-family judge attempts
+ * for this PR", read from a store this module cannot see. The LOOP ceiling below is a different
+ * thing wearing a similar word and is deliberately not given that cause id. `spec_changed`,
+ * however, CAN now occur locally — `loopSession()` pins the criteria fingerprint for the duration
+ * of one loop and reports drift against it. See the note there.
  */
 const RETRYABLE_CAUSES = [CAUSES.CRITERIA_UNMET, CAUSES.INSTALL_FAILED];
 
 /** Default ceiling on graded pre-flight runs per day. Advisory — see the note on spend below. */
 const DEFAULT_DAILY_JUDGE_CAP = 20;
+
+/**
+ * Default ceiling on iterations in one `--loop` session. Five, because two fully-judged sessions
+ * still fit comfortably under DEFAULT_DAILY_JUDGE_CAP, and a fix that has not landed in five
+ * attempts is one a human should look at rather than one more roll of the same dice.
+ */
+const DEFAULT_LOOP_MAX_ATTEMPTS = 5;
+
+/**
+ * The scratch state file, read and written by BOTH the judge guard and the loop session.
+ *
+ * One file on purpose: deleting it is the documented escape hatch for both controls, and two files
+ * would mean two half-escapes and a confusing partial state. That makes read-modify-write
+ * mandatory — `charge()` used to write the object it knew about, whole, which would have silently
+ * erased the loop counter and the criteria pin on every judged iteration. Both helpers below merge.
+ */
+function readState(statePath) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (_) {
+    return {}; // absent or corrupt — a fresh counter is the right recovery, both controls are advisory
+  }
+}
+
+/** Merge `patch` into the state file, preserving every key neither control owns. */
+function writeState(statePath, patch) {
+  const next = { ...readState(statePath), ...patch };
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  fs.writeFileSync(statePath, JSON.stringify(next, null, 2));
+  return next;
+}
 
 /** Run a git command locally and return stdout, or null when it fails. */
 async function gitOut(cmd, { cwd, env, timeoutMs = 60000, deps = {} }) {
@@ -298,11 +335,7 @@ function judgeGuard({ repoRoot, sha, env, deps = {} }) {
     ? Number(env.FELIX_PREFLIGHT_JUDGE_CAP)
     : DEFAULT_DAILY_JUDGE_CAP;
 
-  let state = { day: today, count: 0, lastJudgedSha: null };
-  try {
-    const parsed = JSON.parse(fs.readFileSync(statePath, 'utf8'));
-    if (parsed && typeof parsed === 'object') state = { ...state, ...parsed };
-  } catch (_) { /* absent or corrupt — a fresh counter is the right recovery, it is advisory */ }
+  let state = { day: today, count: 0, lastJudgedSha: null, ...readState(statePath) };
   if (state.day !== today) state = { day: today, count: 0, lastJudgedSha: state.lastJudgedSha };
 
   const refuse = (reason) => ({ allowed: false, reason, state, statePath, cap });
@@ -328,12 +361,265 @@ function judgeGuard({ repoRoot, sha, env, deps = {} }) {
     /** Charged on the ATTEMPT, before the result is known — same discipline as CI's cap. */
     charge() {
       try {
-        fs.mkdirSync(path.dirname(statePath), { recursive: true });
-        fs.writeFileSync(statePath, JSON.stringify({ day: today, count: state.count + 1, lastJudgedSha: sha }, null, 2));
+        // MERGE, never overwrite. The loop session's counter and criteria pin live in the same
+        // file; a whole-object write here would erase both on every judged iteration, so the
+        // ceiling would silently reset itself exactly when the judge was being spent.
+        writeState(statePath, { day: today, count: state.count + 1, lastJudgedSha: sha });
       } catch (e) {
         logger.warn(`could not record the pre-flight judge attempt (${e.message}) — the daily counter will undercount.`);
       }
     },
+  };
+}
+
+/**
+ * The loop session — a durable attempt counter and a criteria pin, for `felix preflight --loop`.
+ *
+ * WHAT THIS IS FOR, precisely. It is NOT the money control (that is judgeGuard, above) and NOT the
+ * CI-budget control (that is the containment boundary in the header). It bounds two things a local
+ * iteration loop makes cheap that were previously only slow:
+ *
+ *   - THRASH. An agent that cannot converge keeps running the repo's whole test suite, forever, on
+ *     the human's machine and in the human's token budget. Five attempts and then a person looks.
+ *   - RESAMPLING. The judge is stochastic. Grinding an unconverged diff against it until a roll
+ *     comes up green is the local echo of `attempts_exhausted`, and the unchanged-tree refusal
+ *     alone does not close it — a no-op edit changes the tree. A bounded session does.
+ *
+ * WHY THE COUNTER IS NOT IN THE AGENT'S HEAD. A protocol document is followed by exactly the entity
+ * it is meant to bound, so "count to five" as an instruction bounds nothing. Durable, out-of-process
+ * state also survives the far more common non-adversarial failure: an agent whose context was
+ * compacted mid-loop and no longer remembers it is on attempt four.
+ *
+ * WHAT IT HONESTLY IS NOT. A wall. `--loop` is a flag the caller can omit, and this file is a file
+ * the caller can delete. Both are stated in the refusal text, for the same reason judgeGuard states
+ * its own escape hatch: a control that reads as enforcement and isn't is worse than no control. The
+ * achievable goal is that skipping it is an ACT — a flag deliberately dropped, a file deliberately
+ * removed — which appears in the agent's transcript where a human can see it afterwards. A bare
+ * `felix preflight` during a live session says so out loud for that reason.
+ *
+ * ── THE KEY, WHICH IS THE ONLY PART WITH A WRONG ANSWER ──────────────────────────────────────
+ *
+ * The session is keyed on the REPO PATH — the same key as the scratch dir — and nothing else.
+ * Every other candidate resets the budget on something the loop itself controls:
+ *
+ *   - the criteria fingerprint would hand a fresh budget to any agent that edits the rubric, which
+ *     is the precise cheat the whole apparatus exists to stop;
+ *   - HEAD would refill it on one mid-loop commit, which is the whitespace-push reset that CI's
+ *     `attempts_exhausted` was written to close;
+ *   - the base ref is one `git update-ref` away, as localBaseConfigFetcher already notes.
+ *
+ * The cost of repo-path keying is that two concurrent loops on two branches of one checkout share
+ * a budget. That is rare locally, and the failure is annoyance rather than a leak or a lie — the
+ * right direction to be wrong in.
+ *
+ * ── THE PIN ──────────────────────────────────────────────────────────────────────────────────
+ *
+ * Attempt 1 records `specFingerprint(spec.criteria)`. Every later attempt in the session compares
+ * against it and, on any difference, HALTS the loop rather than warning: a warning is read by the
+ * bounded entity, and "VERIFIED on attempt 4" would then certify a rubric that moved after attempt
+ * 1 graded against it — the silent re-baseline verdict.js's `spec_changed` note exists to kill.
+ *
+ * Note what this does NOT do: it does not care whether the criteria file is dirty, staged or
+ * committed. Refusing to run on a dirty criteria file was considered and rejected — the agent just
+ * commits it, and it fails every honest loop that writes its criteria before starting. Only
+ * MOVEMENT DURING A SESSION is the finding, and an honest loop never moves them. The relief is
+ * proportionate and needs no label: edit the criteria and start a new session.
+ *
+ * The false-positive surface is empty by construction. A session that begins without criteria is
+ * `no_spec` on attempt 1, which is terminal — so a session that survives to attempt 2 always
+ * pinned a real fingerprint. A human editing criteria BETWEEN sessions gets a new pin. Scope that
+ * genuinely grows mid-loop is the one real case, and halting is still correct there: inside an
+ * autonomous loop, the entity rewriting the rubric is the agent.
+ *
+ * @returns {object} a session handle; `enabled:false` when --loop was not passed, in which case
+ *                   every method is a no-op and nothing is ever written.
+ */
+function loopSession({ repoRoot, env, opts = {}, deps = {} }) {
+  const statePath = deps.statePath || path.join(scratchDirFor(repoRoot), 'preflight-state.json');
+  const today = deps.today || new Date().toISOString().slice(0, 10);
+  const enabled = Boolean(opts.loop);
+
+  // Same `> 0 ? : default` shape as FELIX_PREFLIGHT_JUDGE_CAP, so `--max-attempts 0` and garbage
+  // both fall back to the default rather than becoming an accidental zero or infinite budget.
+  const limit = Number(opts.maxAttempts) > 0 ? Math.floor(Number(opts.maxAttempts))
+    : Number(env.FELIX_PREFLIGHT_LOOP_MAX) > 0 ? Math.floor(Number(env.FELIX_PREFLIGHT_LOOP_MAX))
+    : DEFAULT_LOOP_MAX_ATTEMPTS;
+
+  if (opts.resetLoop) {
+    try { writeState(statePath, { loop: null }); } catch (_) { /* nothing to reset */ }
+  }
+
+  const stored = readState(statePath).loop;
+  // A new day is a new session, matching judgeGuard's rollover so there is one mental model for
+  // the file rather than two. Waiting for midnight to refill a tripwire is not a threat worth
+  // engineering against; forgetting why the counter reset is.
+  const live = stored && stored.day === today && !opts.resetLoop ? stored : null;
+
+  const session = {
+    enabled,
+    statePath,
+    limit,
+    attempt: live ? live.attempt : 0,
+    fingerprint: live ? live.fingerprint || null : null,
+    active: Boolean(live && live.attempt > 0),
+    exhausted: false,
+    halted: null,
+    reason: null,
+    // No-ops by default, so every caller can call them unconditionally. A disabled session and a
+    // refused one must write NOTHING: a plain `felix preflight` that quietly pinned a fingerprint
+    // would make the human's own run the baseline for the agent's next loop.
+    checkPin: (fingerprint) => ({ drifted: false, baseline: null, current: fingerprint }),
+    close: () => {},
+  };
+
+  if (!enabled) return session;
+
+  if (session.attempt >= limit) {
+    session.exhausted = true;
+    session.halted = 'attempts_exhausted';
+    session.reason =
+      `this loop session has used all ${limit} of its attempts. The fix has not landed in ${limit} `
+      + 'iterations, so the next useful step is a human reading the last verdict — not another '
+      + 'roll of the same dice against a judge that is not deterministic. Raise the ceiling with '
+      + `--max-attempts N or FELIX_PREFLIGHT_LOOP_MAX, or start a clean session with --reset-loop. `
+      + `This is a tripwire, not a wall — the state lives in ${statePath} and you can delete it.`;
+    return session;
+  }
+
+  // Charged on ENTRY, before anything is graded, for judgeGuard's reason: a counter that only
+  // increments on a completed run is not a counter, it is a discount for whatever makes the run
+  // crash. A crashed attempt burns one, and that is the intended direction.
+  session.attempt += 1;
+  try {
+    writeState(statePath, {
+      loop: { day: today, attempt: session.attempt, limit, fingerprint: session.fingerprint },
+    });
+  } catch (e) {
+    logger.warn(`could not record the loop attempt (${e.message}) — the ceiling will undercount.`);
+  }
+
+  /**
+   * Compare this attempt's criteria against the session pin, and pin it on attempt 1.
+   * Returns `{drifted, baseline, current}`; `drifted` is what halts the loop.
+   */
+  session.checkPin = (fingerprint) => {
+    // TRUTHINESS, not `!== undefined`, and that is the load-bearing part rather than the `if`
+    // below. specFingerprint returns NULL for an empty set — "there was nothing to pin", which is
+    // the `no_spec` run. A falsy pin therefore means "still unpinned", so criteria that legitimately
+    // appear on a later attempt are not read as drift. Tighten this to an `undefined` check and a
+    // session that began without criteria would trip the moment the author wrote them.
+    if (!session.fingerprint) {
+      // The inner guard only skips a pointless disk write (the entry charge already recorded the
+      // null). It is not what makes the line above safe — a mutation run confirmed removing it
+      // changes nothing observable.
+      if (fingerprint) {
+        session.fingerprint = fingerprint;
+        try {
+          writeState(statePath, { loop: { day: today, attempt: session.attempt, limit, fingerprint } });
+        } catch (_) { /* advisory; the ceiling still holds */ }
+      }
+      return { drifted: false, baseline: null, current: fingerprint };
+    }
+    const drifted = fingerprint !== session.fingerprint;
+    if (drifted) session.halted = 'spec_changed';
+    return { drifted, baseline: session.fingerprint, current: fingerprint };
+  };
+
+  /** The session is over: the work is verified and the next loop should start fresh. */
+  session.close = () => {
+    try { writeState(statePath, { loop: null }); } catch (_) { /* advisory */ }
+  };
+
+  return session;
+}
+
+/** The loop half of every result. Absent-but-present (`enabled:false`) rather than omitted. */
+function loopReport(session) {
+  return {
+    enabled: session.enabled,
+    attempt: session.attempt,
+    limit: session.limit,
+    halted: session.halted,
+    fingerprint: session.fingerprint || null,
+  };
+}
+
+/**
+ * The ceiling refusal. NOTE `verdict: null` — and that is the honest shape, not an oversight.
+ *
+ * Nothing was graded: no install ran, no test ran, no judge was called. Composing a verdict here
+ * would assert Felix evaluated something it did not. CI's `attempts_exhausted` composes one only
+ * because a check run must carry SOME conclusion; locally there is no check run and so no forcing
+ * function, which is why this stays out of compose() and out of CAUSES entirely — those ids are the
+ * wire contract for the verdict store, and this state never reaches it.
+ *
+ * `retryable: false` is what the loop protocol actually reads. One rule covers both halts and every
+ * terminal verdict: iterate only while `retryable === true`.
+ */
+function haltResult({ session, snap, started, warnings, criteriaPath }) {
+  const required = [
+    `Felix refused this attempt: ${session.reason}`,
+    'Nothing was graded — no install, no tests, no judge. Read the previous attempt\'s verdict.',
+  ];
+  return {
+    verdict: null,
+    cause: null,
+    reason: session.reason,
+    required_to_pass: required,
+    retryable: false,
+    loop: loopReport(session),
+    judge: { requested: false, attempted: false, error: null, guard: { allowed: false, reason: session.reason } },
+    fingerprint: session.fingerprint || null,
+    criteriaPath,
+    criteriaPresent: null,
+    snapshot: { sha: snap.sha, tree: snap.tree, headSha: snap.headSha, dirty: snap.dirty, untracked: snap.untracked },
+    base: { ref: null, source: 'not resolved — the loop halted first', sha: null },
+    warnings,
+    spec: null, tier1: [], tier3: null, files: [], configSource: null, detected: null,
+    meta: { version, headSha: snap.sha, dryRun: true, repo: '(local pre-flight)', durationMs: Date.now() - started },
+    body: `## Felix pre-flight — loop halted\n\n${session.reason}\n`,
+  };
+}
+
+/**
+ * The criteria-drift halt. Unlike the ceiling this DOES carry a verdict, because the claim is a
+ * real one about the change: Felix did not verify it, and the reason is the same one CI would give.
+ * It reuses `CAUSES.SPEC_CHANGED` rather than inventing a local id — the semantics are identical
+ * (the graded set moved after a grade was rendered against it) and `retryable` then falls out of
+ * RETRYABLE_CAUSES with no special case. The prose is local because CI's relief valve (a maintainer
+ * label) does not exist here and quoting it would be false.
+ */
+function driftResult({ session, snap, started, warnings, criteria, pin, spec, base, diffFrom, files, configSource, detected }) {
+  const gone = !pin.current;
+  const reason = 'acceptance criteria changed during the loop';
+  const required = [
+    (gone
+      ? `The acceptance criteria in ${criteria.path} were REMOVED during this loop session. `
+      : `The acceptance criteria in ${criteria.path} changed during this loop session. `)
+    + 'Attempt 1 pinned them and every later attempt is graded against that pin, because editing '
+    + 'away a criterion the code fails is a cheaper route to green than fixing the code — and a '
+    + 'loop that can rewrite its own rubric makes the verifier decorative. '
+    + `Pinned ${pin.baseline.slice(0, 12)}, now ${pin.current ? pin.current.slice(0, 12) : 'none'}. `
+    + 'To proceed: restore the criteria and the loop resumes, or accept that the rubric genuinely '
+    + 'moved and start a new session with --reset-loop — which is a deliberate act a human can see.',
+  ];
+  return {
+    verdict: 'NOT VERIFIED',
+    cause: CAUSES.SPEC_CHANGED,
+    reason,
+    required_to_pass: required,
+    retryable: RETRYABLE_CAUSES.includes(CAUSES.SPEC_CHANGED), // false, and computed so it stays false
+    loop: loopReport(session),
+    judge: { requested: false, attempted: false, error: null, guard: { allowed: false, reason } },
+    fingerprint: pin.current,
+    criteriaPath: criteria.path,
+    criteriaPresent: criteria.present,
+    snapshot: { sha: snap.sha, tree: snap.tree, headSha: snap.headSha, dirty: snap.dirty, untracked: snap.untracked },
+    base: { ref: base.ref, source: base.source, sha: diffFrom },
+    warnings,
+    spec, tier1: [], tier3: null, files, configSource, detected,
+    meta: { version, headSha: snap.sha, baseSha: diffFrom, dryRun: true, repo: '(local pre-flight)', durationMs: Date.now() - started },
+    body: `## Felix pre-flight — NOT VERIFIED (spec_changed)\n\n${required[0]}\n`,
   };
 }
 
@@ -345,12 +631,15 @@ function judgeGuard({ repoRoot, sha, env, deps = {} }) {
  * @param {string} [opts.criteriaPath] criteria markdown (default: .felix/preflight-criteria.md)
  * @param {string} [opts.base]         explicit base ref to diff against
  * @param {boolean} [opts.judge]       call the cross-family judge (default false — it costs money)
+ * @param {boolean} [opts.loop]        count this run as one attempt in a bounded loop session
+ * @param {number}  [opts.maxAttempts] ceiling for that session (default 5)
+ * @param {boolean} [opts.resetLoop]   discard any live session before starting
  * @param {object} [opts.env]          environment (default process.env)
  * @param {object} [opts.deps]         test seam: { createJudge }. The judge is the one step that
  *                                     costs money and makes a network call, so the eligibility
  *                                     conjunction below is unreachable from a test without it —
  *                                     which is exactly how a clause gets dropped unnoticed.
- * @returns {Promise<object>} { verdict, cause, retryable, required_to_pass, body, ... }
+ * @returns {Promise<object>} { verdict, cause, retryable, loop, required_to_pass, body, ... }
  */
 async function runPreflight(opts = {}) {
   const env = opts.env || process.env;
@@ -369,6 +658,23 @@ async function runPreflight(opts = {}) {
       `⚠️ ${snap.untracked.length} NEW file(s) are included here but reach CI only if you commit them: `
       + `${snap.untracked.slice(0, 10).join(', ')}${snap.untracked.length > 10 ? ', …' : ''}`
     );
+  }
+
+  // (1b) The loop session. AFTER the snapshot only because that is what resolves repoRoot, which
+  // keys the state — and a snapshot failure ("not a git repo", "no commits yet") is an environment
+  // problem rather than an iteration, so not burning an attempt on it is the right side to err on.
+  // Everything expensive is still downstream: a refusal here costs no install, no test run, no judge.
+  const session = loopSession({ repoRoot, env, opts, deps: (opts.deps || {}).loop });
+  if (!session.enabled && session.active) {
+    // The cheap sharpener on an omitted --loop. It never refuses a human grinding by hand; it just
+    // means "ran uncounted while a loop was live" is a stated fact rather than a silent one.
+    logger.info(
+      `a loop session is live (attempt ${session.attempt}/${session.limit}) — this run is NOT counted, `
+      + 'because --loop was not passed.'
+    );
+  }
+  if (session.exhausted) {
+    return haltResult({ session, snap, started, warnings, criteriaPath: (opts.criteriaPath || DEFAULT_CRITERIA_PATH) });
   }
 
   // (2) Base ref, then the diff.
@@ -423,6 +729,19 @@ async function runPreflight(opts = {}) {
   });
   const fingerprint = specFingerprint(spec.criteria);
   logger.info(`spec: ${spec.source || 'none'} (${spec.total} criteria, ${spec.size.renderedChars} chars)`);
+
+  // (5b) The session's criteria pin. Checked HERE — after the spec is known, before the sandbox is
+  // built — so a loop whose rubric moved costs no install, no test run and no judge call.
+  //
+  // Diagnosed in this path rather than handed to compose() as `specDrift`, and that is the whole
+  // point: compose's `no_spec` branch is ordered ABOVE its `spec_changed` branch, so an agent that
+  // deleted the criteria file outright would be reported as "you have no criteria" — terminal
+  // either way, but the wrong finding, and verdict.js is explicit that a moved spec must not be
+  // masked by another cause. Deleting every criterion IS the drift.
+  const pin = session.checkPin(fingerprint);
+  if (pin.drifted) {
+    return driftResult({ session, snap, started, warnings, criteria, pin, spec, base, diffFrom, files, configSource, detected });
+  }
 
   // (6) Judge eligibility. NOT shouldRunJudge() from index.js, and the difference is real rather
   // than drift: there is no fork here, no durable pin and no durable attempt count, and there IS
@@ -549,11 +868,17 @@ async function runPreflight(opts = {}) {
     note: verdictObj.verdict === 'SKIPPED' ? verdictObj.reason : undefined,
   });
 
+  // The work landed, so the session is over and the next `--loop` starts with a full budget and a
+  // fresh pin. Only VERIFIED closes it: SKIPPED is a passing conclusion but not a finished piece of
+  // work, and refilling the budget on it would let "touch a README" refill the ceiling.
+  if (verdictObj.verdict === 'VERIFIED') session.close();
+
   return {
     verdict: verdictObj.verdict,
     cause: verdictObj.cause || null,
     reason: verdictObj.reason,
     required_to_pass: verdictObj.required_to_pass,
+    loop: loopReport(session),
     // The loop's contract. Computed here, from the cause, so a caller cannot decide for itself
     // that no_spec looks retryable — see RETRYABLE_CAUSES.
     retryable: RETRYABLE_CAUSES.includes(verdictObj.cause),
@@ -581,17 +906,26 @@ async function runPreflight(opts = {}) {
  */
 function formatPreflight(result) {
   const lines = [];
+  // `verdict: null` is the ceiling refusal — nothing was graded, so it gets its own mark rather
+  // than falling through to INSUFFICIENT EVIDENCE, which would claim Felix looked and could not say.
   const mark = result.verdict === 'VERIFIED' ? '✅ VERIFIED'
     : result.verdict === 'NOT VERIFIED' ? '❌ NOT VERIFIED'
     : result.verdict === 'SKIPPED' ? '⏭️ SKIPPED'
-    : '❓ INSUFFICIENT EVIDENCE';
+    : result.verdict ? '❓ INSUFFICIENT EVIDENCE'
+    : '⛔ HALTED — nothing was graded';
 
   lines.push('', '─'.repeat(64));
   lines.push(`Felix pre-flight — ${mark}${result.cause ? `  (${result.cause})` : ''}`);
   lines.push('─'.repeat(64));
   lines.push(`snapshot   ${result.snapshot.sha.slice(0, 12)}  ${result.snapshot.dirty ? '· uncommitted changes included' : '· clean tree'}`);
-  lines.push(`base       ${result.base.sha.slice(0, 12)}  · ${result.base.source}`);
-  lines.push(`criteria   ${result.criteriaPresent ? `${result.spec.total} from ${result.criteriaPath}` : `MISSING — ${result.criteriaPath}`}`);
+  if (result.base.sha) lines.push(`base       ${result.base.sha.slice(0, 12)}  · ${result.base.source}`);
+  if (result.criteriaPresent !== null) {
+    lines.push(`criteria   ${result.criteriaPresent ? `${result.spec.total} from ${result.criteriaPath}` : `MISSING — ${result.criteriaPath}`}`);
+  }
+  if (result.loop && result.loop.enabled) {
+    lines.push(`loop       attempt ${result.loop.attempt} of ${result.loop.limit}`
+      + `${result.loop.halted ? `  · HALTED (${result.loop.halted})` : ''}`);
+  }
   if (result.fingerprint) {
     lines.push(`fingerprint ${result.fingerprint.slice(0, 12)}`);
     lines.push('           ↳ the PR description must produce this same hash, or CI grades a different spec.');
@@ -605,7 +939,7 @@ function formatPreflight(result) {
     lines.push('', ...result.warnings.map((w) => `  ${w}`));
   }
   lines.push('', result.retryable
-    ? '↻ RETRYABLE — fix the code and run pre-flight again.'
+    ? `↻ RETRYABLE — fix the CODE and run pre-flight again${result.loop && result.loop.enabled ? ` (${result.loop.limit - result.loop.attempt} attempt(s) left)` : ''}.`
     : '■ TERMINAL for an automated loop — this needs a human, not another iteration.');
   lines.push('', 'Pre-flight published nothing: no verdict row, no comment, no check run. CI still grades this independently.');
   lines.push('─'.repeat(64), '');
@@ -613,7 +947,8 @@ function formatPreflight(result) {
 }
 
 module.exports = {
-  runPreflight, formatPreflight, RETRYABLE_CAUSES, DEFAULT_CRITERIA_PATH,
+  runPreflight, formatPreflight, RETRYABLE_CAUSES, DEFAULT_CRITERIA_PATH, DEFAULT_LOOP_MAX_ATTEMPTS,
   // exported for tests: each is a decision that must be assertable without a live repo
   resolveBaseRef, parseNameStatus, attachPatches, localBaseConfigFetcher, judgeGuard, loadCriteria,
+  loopSession, scratchDirFor,
 };

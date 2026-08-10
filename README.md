@@ -109,8 +109,41 @@ node bin/felix.js preflight --judge
 node bin/felix.js preflight --json
 ```
 
-Exit codes match the PR path (`0` clean · `1` NOT VERIFIED · `2` INSUFFICIENT · `3` error).
-Whether a failure is worth **retrying** is a separate field, `retryable`, in `--json`.
+Exit codes match the PR path (`0` clean · `1` NOT VERIFIED · `2` INSUFFICIENT · `3` error), plus
+`4` for a refused loop attempt. Whether a failure is worth **retrying** is a separate field,
+`retryable`, in `--json`.
+
+### The loop
+
+`--loop` makes the run one counted attempt in a bounded session. The *fix* step is the agent's own
+work, not Felix's — Felix does not shell out to a model — so the protocol the agent follows lives
+in [`skills/felix-preflight-loop/SKILL.md`](skills/felix-preflight-loop/SKILL.md), and what has to
+be machine-checked lives here.
+
+```bash
+node bin/felix.js preflight --loop --json          # attempt N of 5
+node bin/felix.js preflight --loop --max-attempts 8
+node bin/felix.js preflight --loop --reset-loop    # new budget, new criteria pin
+```
+
+Two things are enforced in code rather than asked for in prose, because a protocol document is
+followed by exactly the entity it is supposed to bound:
+
+- **A ceiling.** Five attempts per session by default, charged on entry, keyed on the repo path.
+  Past it Felix refuses: nothing is installed, run or judged, `verdict` is `null` and the exit code
+  is `4`. It bounds thrash, and it bounds rolling an unconverged diff against a non-deterministic
+  judge until a green comes up. Durable state also survives an agent whose context was compacted
+  mid-loop and no longer remembers it is on attempt four.
+- **A criteria pin.** Attempt 1 records the criteria fingerprint; any later attempt that moves it
+  halts the loop with `spec_changed` — including deleting the file, which would otherwise report as
+  `no_spec` and tell the wrong story. Editing away a criterion the code fails is a cheaper route to
+  green than fixing the code, and a loop that can rewrite its own rubric makes the verifier
+  decorative. Relief is `--reset-loop`, which is a deliberate act a human can see.
+
+Both are **tripwires, not walls**, and both say so in their own refusal text: `--loop` is a flag the
+caller can omit and the state is a file the caller can delete. The achievable goal is that skipping
+them is an *act* that appears in the agent's transcript. A plain `felix preflight` during a live
+session runs uncounted and prints one line saying it did.
 
 ### What it will and will not do
 

@@ -33,6 +33,9 @@ function parseArgs(argv) {
     else if (a === '--dry-run') { args.dryRun = true; args.post = false; }
     else if (a === '--json') args.json = true;
     else if (a === '--judge') args.judge = true;
+    else if (a === '--loop') args.loop = true;
+    else if (a === '--reset-loop') args.resetLoop = true;
+    else if (a === '--max-attempts') args.maxAttempts = argv[++i];
     else if (a === '--repo-path') args.repoPath = argv[++i];
     else if (a === '--repo') args.repo = argv[++i];
     else if (a === '--criteria') args.criteria = argv[++i];
@@ -48,6 +51,7 @@ const HELP = `felix — behavioral PR verification
 Usage:
   felix <owner/repo#PR> [--post] [--repo-path <dir>] [--json]   verify a PR (default)
   felix preflight [--judge] [--criteria <f>] [--base <ref>]     verify your WORKING TREE, no PR
+  felix preflight --loop [--max-attempts N] [--reset-loop]      …as one counted attempt in a loop
   felix spec-sentinel <owner/repo#PR> [--post] [--json]         re-check the criteria pin only
   felix outcome <owner/repo#PR> <clean|defect>                  record a post-merge outcome
   felix scan-outcomes --repo <owner/repo> [--limit N]           auto-mark reverted PRs as defects
@@ -56,6 +60,7 @@ Usage:
 Examples:
   felix owner/repo#42 --post --repo-path .
   felix preflight --judge
+  felix preflight --loop --judge --json
   felix outcome owner/repo#42 defect
   felix metrics --repo owner/repo
 
@@ -93,6 +98,10 @@ async function cmdSpecSentinel(args) {
  * a non-zero code is worth RETRYING is a different question, and the answer is `retryable` in
  * --json — deliberately not encoded in the exit code, because "the tests failed" and "you have no
  * acceptance criteria" are both exit 1 and only one of them is a loop's business to fix.
+ *
+ * 4 is the loop ceiling: Felix REFUSED the attempt and graded nothing at all. It is its own code
+ * rather than folded into 1 or 2 because those both mean "Felix looked and this is what it found",
+ * and a shell driver that treated a refusal as a finding would report a verdict nobody rendered.
  */
 async function cmdPreflight(args) {
   const { runPreflight, formatPreflight } = require('../src/engine/preflight');
@@ -101,10 +110,14 @@ async function cmdPreflight(args) {
     criteriaPath: args.criteria,
     base: args.base,
     judge: args.judge,
+    loop: args.loop,
+    maxAttempts: args.maxAttempts,
+    resetLoop: args.resetLoop,
     env: process.env,
   });
   console.log(args.json ? JSON.stringify(result, null, 2) : formatPreflight(result));
-  process.exit(result.verdict === 'NOT VERIFIED' ? 1
+  process.exit(result.verdict === null ? 4
+    : result.verdict === 'NOT VERIFIED' ? 1
     : result.verdict === 'INSUFFICIENT EVIDENCE' ? 2 : 0);
 }
 

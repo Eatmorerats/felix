@@ -47,7 +47,8 @@ const { renderError } = require('../src/engine/comment');
 const { computeMetrics, OUTCOMES } = require('../src/engine/calibration');
 const { resolveGating, gateDecision } = require('../src/engine/gating');
 const {
-  RETRYABLE_CAUSES, resolveBaseRef, parseNameStatus, attachPatches,
+  RETRYABLE_CAUSES, DEFAULT_LOOP_MAX_ATTEMPTS, loopSession,
+  resolveBaseRef, parseNameStatus, attachPatches,
   localBaseConfigFetcher, judgeGuard, loadCriteria,
 } = require('../src/engine/preflight');
 const { parseRevertedPR, detectRevertedPRs } = require('../src/engine/outcomes');
@@ -4256,6 +4257,146 @@ test('judgeGuard treats a corrupt state file as a fresh counter', () => {
   fs.writeFileSync(statePath, 'not json at all');
   const g = judgeGuard({ repoRoot: d, sha: 'z', env: {}, deps: { statePath, today: '2026-08-09' } });
   assert.strictEqual(g.allowed, true, 'it is advisory: a corrupt tripwire must not block the run');
+});
+
+// ── the loop session: the ceiling and the criteria pin ───────────────────────────────────────
+
+const loopDeps = (statePath, today = '2026-08-09') => ({ statePath, today });
+
+test('a session with no --loop counts nothing and writes nothing', () => {
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  const s = loopSession({ repoRoot: d, env: {}, opts: {}, deps: loopDeps(statePath) });
+  assert.strictEqual(s.enabled, false);
+  assert.strictEqual(s.attempt, 0);
+  // A plain `felix preflight` that pinned a fingerprint would make the HUMAN's run the baseline
+  // the agent's next loop is frozen against. It must be inert.
+  assert.deepStrictEqual(s.checkPin('abc'), { drifted: false, baseline: null, current: 'abc' });
+  s.close();
+  assert.strictEqual(fs.existsSync(statePath), false, 'an uncounted run leaves no trace');
+});
+
+test('the loop counts up on entry and refuses past the ceiling', () => {
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  const opts = { loop: true, maxAttempts: 3 };
+  for (let i = 1; i <= 3; i++) {
+    const s = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+    assert.strictEqual(s.attempt, i, `attempt ${i}`);
+    assert.strictEqual(s.exhausted, false);
+    // Charged on ENTRY: the count is durable before anything is graded, so a crashed attempt
+    // burns one rather than becoming a free retry.
+    assert.strictEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')).loop.attempt, i);
+  }
+  const over = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+  assert.strictEqual(over.exhausted, true);
+  assert.strictEqual(over.halted, 'attempts_exhausted');
+  assert.match(over.reason, /tripwire, not a wall/, 'it must state its own escape hatch');
+  assert.match(over.reason, /--reset-loop/);
+});
+
+test('the ceiling is movable, and 0 or garbage falls back to the default', () => {
+  const d = tmpdir();
+  const sp = (n) => path.join(d, `s${n}.json`);
+  const at = (opts, env = {}) => loopSession({ repoRoot: d, env, opts, deps: loopDeps(sp(Math.random())) }).limit;
+  assert.strictEqual(at({ loop: true }), DEFAULT_LOOP_MAX_ATTEMPTS);
+  assert.strictEqual(at({ loop: true, maxAttempts: '9' }), 9);
+  assert.strictEqual(at({ loop: true }, { FELIX_PREFLIGHT_LOOP_MAX: '7' }), 7);
+  // The FELIX_PREFLIGHT_JUDGE_CAP shape, on purpose: neither an accidental zero budget (which
+  // would refuse every honest loop) nor an accidental infinite one.
+  assert.strictEqual(at({ loop: true, maxAttempts: '0' }), DEFAULT_LOOP_MAX_ATTEMPTS);
+  assert.strictEqual(at({ loop: true, maxAttempts: 'lots' }), DEFAULT_LOOP_MAX_ATTEMPTS);
+  assert.strictEqual(at({ loop: true, maxAttempts: '-4' }), DEFAULT_LOOP_MAX_ATTEMPTS);
+});
+
+test('attempt 1 pins the criteria, and a later attempt that moves them HALTS', () => {
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  const opts = { loop: true };
+  const first = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+  assert.deepStrictEqual(first.checkPin('fp-one'), { drifted: false, baseline: null, current: 'fp-one' });
+  assert.strictEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')).loop.fingerprint, 'fp-one');
+
+  const same = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+  assert.strictEqual(same.checkPin('fp-one').drifted, false, 'an unchanged rubric is not drift');
+
+  const moved = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+  const pin = moved.checkPin('fp-two');
+  assert.strictEqual(pin.drifted, true);
+  assert.strictEqual(pin.baseline, 'fp-one');
+  assert.strictEqual(moved.halted, 'spec_changed');
+});
+
+test('DELETING every criterion is drift, not a fresh start', () => {
+  // specFingerprint returns null for an empty set. Without this, the cheapest cheat in the whole
+  // system — delete the criteria file the loop keeps failing — would read as `no_spec` (terminal,
+  // but the wrong finding) or, on attempt 1, as "nothing to pin".
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  const opts = { loop: true };
+  loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) }).checkPin('fp-one');
+  const gone = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+  const pin = gone.checkPin(null);
+  assert.strictEqual(pin.drifted, true);
+  assert.strictEqual(gone.halted, 'spec_changed');
+});
+
+test('a session that starts with NO criteria pins nothing, so criteria may legitimately appear', () => {
+  // Attempt 1 without criteria is no_spec and terminal on its own. Pinning the ABSENCE would then
+  // make writing the criteria — the correct response — look like drift.
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  const opts = { loop: true };
+  const first = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+  assert.strictEqual(first.checkPin(null).drifted, false);
+  assert.strictEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')).loop.fingerprint, null);
+  const next = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+  assert.strictEqual(next.checkPin('fp-one').drifted, false, 'criteria appearing is not drift');
+});
+
+test('--reset-loop and a new day both start a clean session; close() ends one', () => {
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  const opts = { loop: true, maxAttempts: 2 };
+  loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) }).checkPin('fp-one');
+  loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+  assert.strictEqual(loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) }).exhausted, true);
+
+  const reset = loopSession({ repoRoot: d, env: {}, opts: { ...opts, resetLoop: true }, deps: loopDeps(statePath) });
+  assert.strictEqual(reset.attempt, 1);
+  assert.strictEqual(reset.fingerprint, null, 'a reset drops the pin too, or the rubric stays frozen forever');
+
+  const tomorrow = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath, '2026-08-10') });
+  assert.strictEqual(tomorrow.attempt, 1, 'same rollover as the judge cap — one mental model for the file');
+
+  tomorrow.close();
+  const after = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath, '2026-08-10') });
+  assert.strictEqual(after.attempt, 1, 'VERIFIED ends the session, so the next loop is not half-spent');
+});
+
+test('a judged run does NOT erase the loop counter or the pin', () => {
+  // The bug this exists to stop: judgeGuard.charge() used to write {day,count,lastJudgedSha} whole.
+  // Sharing one state file means every judged iteration would have silently reset the ceiling and
+  // dropped the criteria pin — the two controls would evaporate exactly when spend was happening.
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  const opts = { loop: true, maxAttempts: 4 };
+  const s = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+  s.checkPin('fp-one');
+
+  judgeGuard({ repoRoot: d, sha: 'treesha', env: {}, deps: { statePath, today: '2026-08-09' } }).charge();
+
+  const after = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  assert.strictEqual(after.count, 1, 'the judge counter still works');
+  assert.strictEqual(after.lastJudgedSha, 'treesha');
+  assert.strictEqual(after.loop.attempt, 1, 'and the loop counter survived it');
+  assert.strictEqual(after.loop.fingerprint, 'fp-one', 'and so did the pin');
+
+  // …and the reverse direction: charging a loop attempt must not drop the judge's unchanged-tree sha.
+  loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+  const both = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  assert.strictEqual(both.lastJudgedSha, 'treesha');
+  assert.strictEqual(both.loop.attempt, 2);
 });
 
 test('loadCriteria reports absence rather than inventing an empty spec', () => {
