@@ -54,7 +54,17 @@ const fs = require('fs');
 const path = require('path');
 // Same as bin/felix.js: a key dropped in felix's own .env should just work, rather than needing
 // to be exported into the shell before every run.
-require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
+//
+// FELIX_NO_DOTENV is the hermetic escape hatch, and it exists because of a real incident. The
+// self-test proves "the default spends nothing" with a control leg — strip every judge key, then
+// assert `--spend` dies at seat construction. Stripping process.env is not enough once a .env
+// exists on disk: dotenv reloads the key underneath the test, the control leg passes for the wrong
+// reason, and the suite makes a LIVE BILLED CALL every time it runs. That happened. An explicit
+// flag is used rather than relying on dotenv's no-override semantics, because the guard has to
+// survive a dependency bump — it is the thing standing between `npm test` and a bill.
+if (!/^(1|true|yes|on)$/i.test(process.env.FELIX_NO_DOTENV || '')) {
+  require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
+}
 
 const { createJudge, buildPrompt } = require('../src/engine/judge');
 const { estimateTokens, paceMs, promptBudgetTokens } = require('../src/engine/budget');
@@ -363,8 +373,16 @@ async function main() {
     console.log(`  at this rate ten rolls carry a ${pct(atLeastOne(pHat, 10))} chance of a false green.`);
   }
   console.log('');
-  console.log('  Scope: ONE case, ONE seat config, one day. It bounds nothing about a different');
-  console.log('  diff, an adversarial prompt, or a jury. It publishes nothing.');
+  // Name the seat that was actually measured. The old wording said the result "bounds nothing
+  // about … a jury" unconditionally, which is simply false when the seat IS a jury — and a report
+  // whose scope note is wrong is worse than one with no scope note.
+  const seatDesc = synthetic ? 'a synthetic seat'
+    : family.includes(',') ? `a ${family.split(',').length}-vendor JURY (${family}), merged by unanimity`
+    : `a single ${family} seat`;
+  console.log(`  Scope: ONE case, one day, measured against ${seatDesc}.`);
+  console.log('  It bounds nothing about a different diff, an adversarial prompt, or a different');
+  console.log('  seat configuration — a solo seat is a weaker grader than a unanimity jury, so a');
+  console.log('  number measured on one does not transfer to the other. It publishes nothing.');
   console.log('─'.repeat(78) + '\n');
 
   const record = {

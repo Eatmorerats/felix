@@ -40,9 +40,21 @@ const SCRIPT = path.join(__dirname, 'smoke-judge-variance.js');
  */
 function run(args) {
   const env = { ...process.env };
-  for (const k of ['OPENAI_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'FELIX_JUDGE_FAMILY', 'FELIX_JUDGE_MODEL']) {
-    delete env[k];
+  // Two layers, and BOTH are load-bearing.
+  //
+  // FELIX_NO_DOTENV is the one that actually holds: deleting keys from the child's environment does
+  // nothing about a .env file on disk, which dotenv reloads inside the child. Without this the
+  // control leg below passed for the wrong reason and this suite made a live billed call on every
+  // run. That is not hypothetical — it happened the first time a real key was installed.
+  env.FELIX_NO_DOTENV = '1';
+  // Belt to that suspenders: strip every judge key the shell might already export, including the
+  // _VARIANCE and _PREFLIGHT variants resolveJudgeEnv prefers.
+  for (const base of ['OPENAI_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY']) {
+    delete env[base];
+    delete env[`${base}_VARIANCE`];
+    delete env[`${base}_PREFLIGHT`];
   }
+  for (const k of ['FELIX_JUDGE_FAMILY', 'FELIX_JUDGE_MODEL']) delete env[k];
   const r = spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8', env });
   return { status: r.status, out: `${r.stdout}${r.stderr}` };
 }
