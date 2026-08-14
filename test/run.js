@@ -544,6 +544,33 @@ test('an unknown judge family fails loud and names the supported families', () =
   assert.match(msg, /openai/);
   assert.match(msg, /gemini/);
 });
+// The recorder used to name the grader from FELIX_JUDGE_FAMILY, so a variance run that declared
+// `openai,gemini` with no GEMINI_API_KEY printed "measured against a 2-vendor JURY" for a SOLO
+// openai run — overstating the grader, which is the direction that makes a bound look stronger.
+// `judge.seats` is the fix: the bench as BUILT, carried by the judge itself.
+test('the judge carries the bench it actually built, not the families that were asked for', () => {
+  const judge = createJudge({ FELIX_JUDGE_FAMILY: 'openai,gemini', OPENAI_API_KEY: 'sk' });
+  assert.deepStrictEqual(judge.seats.requested, ['openai', 'gemini']);
+  assert.deepStrictEqual(judge.seats.active, [{ family: 'openai', model: 'gpt-4.1' }]);
+  assert.strictEqual(judge.seats.skipped.length, 1);
+  assert.strictEqual(judge.seats.skipped[0].family, 'gemini');
+  assert.match(judge.seats.skipped[0].reason, /GEMINI_API_KEY/);
+});
+test('a fully keyed jury reports both seats active and nothing skipped', () => {
+  const judge = createJudge({ FELIX_JUDGE_FAMILY: 'openai,gemini', OPENAI_API_KEY: 'sk', GEMINI_API_KEY: 'g' });
+  assert.deepStrictEqual(judge.seats.active.map((s) => s.family), ['openai', 'gemini']);
+  assert.deepStrictEqual(judge.seats.skipped, []);
+});
+test('the bench cannot be relabelled by the caller that was handed it', () => {
+  const judge = createJudge({ OPENAI_API_KEY: 'sk' });
+  // Asserted on the descriptor, not by attempting a write: whether a rejected write THROWS or is
+  // silently dropped depends on the caller's strict mode, and the property is the invariant.
+  const desc = Object.getOwnPropertyDescriptor(judge, 'seats');
+  assert.strictEqual(desc.writable, false);
+  assert.strictEqual(desc.configurable, false);
+  assert.ok(Object.isFrozen(judge.seats) && Object.isFrozen(judge.seats.active));
+  assert.deepStrictEqual(judge.seats.active.map((s) => s.family), ['openai']);
+});
 test('PROVIDERS declares per-family defaults so a gemini run never inherits the gpt default', () => {
   assert.strictEqual(PROVIDERS.openai.defaultModel, 'gpt-4.1');
   assert.strictEqual(PROVIDERS.openai.apiKeyEnv, 'OPENAI_API_KEY');

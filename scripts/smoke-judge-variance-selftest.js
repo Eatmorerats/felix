@@ -167,6 +167,16 @@ const h = json(hot.out);
 check('the run completed', hot.status === 0, `exit ${hot.status}`);
 check('it is stamped synthetic in the record', h.synthetic === true && h.syntheticRate === 0.15);
 check('and stamped synthetic in the human report', /SELF-TEST\. No vendor is called/.test(hot.out));
+// The record's grader fields come from the judge's own bench, never from FELIX_JUDGE_FAMILY /
+// FELIX_JUDGE_MODEL. The env string names what was ASKED FOR, and a declared vendor with no key is
+// skipped at construction — which is how a solo openai run got recorded as a 2-vendor jury. Pinned
+// here on the synthetic leg (the only one that can be exercised without spending), with the live
+// bench shape pinned offline in test/run.js.
+check('the grader is recorded from the judge\'s bench, not the env',
+  h.family === 'synthetic' && h.model === 'self-test', `${h.family} / ${h.model}`);
+check('and the record carries requested/active/skipped so a missing seat is visible',
+  Array.isArray(h.seats.requested) && Array.isArray(h.seats.skipped)
+  && h.seats.active.length === 1 && h.seats.active[0].family === 'synthetic');
 check('the recovered rate is within sampling noise of 15%', Math.abs(h.pHat - 0.15) < 0.04, `p̂ = ${(h.pHat * 100).toFixed(1)}%`);
 check('the 95% upper bound sits ABOVE the point estimate', h.pUpper95 > h.pHat, `${h.pUpper95.toFixed(3)} > ${h.pHat.toFixed(3)}`);
 check('the clearly-met criteria never flipped',

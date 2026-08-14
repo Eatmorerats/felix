@@ -153,7 +153,10 @@ function syntheticJudge(rate, criteria, CASE, { errorEvery = 0 } = {}) {
     s ^= s << 5; s >>>= 0;
     return s / 0x100000000;
   };
-  return async () => {
+  // `seats` mirrors what createJudge exposes, so the report reads the bench off the judge it was
+  // handed and never branches on which kind it is. A synthetic run has no vendor, and saying that
+  // in the same shape is what keeps a rehearsal from ever being labelled with a real seat.
+  const fn = async () => {
     roll += 1;
     // A vendor that fails is not a vendor that voted. Exercised on demand so the "errors are
     // excluded from every rate" claim is a tested one rather than a comment.
@@ -187,6 +190,14 @@ function syntheticJudge(rate, criteria, CASE, { errorEvery = 0 } = {}) {
       }),
     };
   };
+  return Object.defineProperty(fn, 'seats', {
+    value: Object.freeze({
+      requested: Object.freeze(['synthetic']),
+      active: Object.freeze([Object.freeze({ family: 'synthetic', model: 'self-test' })]),
+      skipped: Object.freeze([]),
+    }),
+    enumerable: true,
+  });
 }
 
 /**
@@ -391,7 +402,10 @@ async function main() {
     ? 'DECISIVE — at least one criterion no careful reader calls met, so a VERIFIED roll is a FALSE green'
     : 'CONTESTED — no criterion is labelled unmet, so a VERIFIED roll is a DEFENSIBLE call, not a false green'}`);
   console.log(`  prompt      ~${promptTokens} tokens (${promptChars} chars), measured`);
-  console.log(`  seat(s)     ${synthetic ? 'synthetic/self-test · seeded, no vendor' : `${family}  ·  temperature 0 (both shipped providers)`}`);
+  // REQUESTED, not graded. This line prints before the judge is built, and a declared family with
+  // no key never becomes a seat — so it cannot yet honestly name the grader. The bench as built is
+  // printed below, after construction, and that is the one the scope line and the record use.
+  console.log(`  seat(s)     ${synthetic ? 'synthetic/self-test · seeded, no vendor' : `${family} (requested)  ·  temperature 0 (both shipped providers)`}`);
   console.log(`  rolls       ${args.k}`);
   console.log(`  cost        ${synthetic ? '$0.00 — nothing is called' : `~$${estUsd.toFixed(2)} input-side, ROUGH — at $${usdPerMTok}/Mtok, output not counted`}\n`);
 
@@ -417,7 +431,20 @@ async function main() {
     process.exit(1);
   }
 
-  const provider = PROVIDERS[family.split(',')[0].trim()] || PROVIDERS.openai;
+  // Everything downstream that names the grader reads THIS, never `family`. See judge.js `bench`.
+  const bench = judge.seats;
+  const graders = bench.active.map((s) => s.family);
+  if (!synthetic) {
+    console.log(`  graded by   ${graders.join(',')}  ·  ${graders.length === 1 ? 'SOLO seat' : `${graders.length}-vendor jury`}`);
+    for (const s of bench.skipped) {
+      console.log(`  ⚠️ SEAT SKIPPED — ${s.family} was requested but ${s.reason}. It did not grade anything.`);
+    }
+    console.log('');
+  }
+
+  // Paced against a seat that EXISTS. Taking the first requested family paces a solo openai run
+  // against gemini's ceiling the moment gemini is declared and unkeyed.
+  const provider = PROVIDERS[graders[0]] || PROVIDERS.openai;
   const rolls = [];
   for (let i = 0; i < args.k; i++) {
     // Paced against the seat's per-minute ceiling, sequentially, using the same helper production
@@ -569,9 +596,11 @@ async function main() {
   // Name the seat that was actually measured. The old wording said the result "bounds nothing
   // about … a jury" unconditionally, which is simply false when the seat IS a jury — and a report
   // whose scope note is wrong is worse than one with no scope note.
+  // From the bench as BUILT, not from FELIX_JUDGE_FAMILY: the env string names what was asked
+  // for, and an unkeyed vendor is silently absent from the vote.
   const seatDesc = synthetic ? 'a synthetic seat'
-    : family.includes(',') ? `a ${family.split(',').length}-vendor JURY (${family}), merged by unanimity`
-    : `a single ${family} seat`;
+    : graders.length > 1 ? `a ${graders.length}-vendor JURY (${graders.join(',')}), merged by unanimity`
+    : `a single ${graders[0]} seat`;
   console.log(`  Scope: ONE case, one day, measured against ${seatDesc}.`);
   console.log('  It bounds nothing about a different diff, an adversarial prompt, or a different');
   console.log('  seat configuration — a solo seat is a weaker grader than a unanimity jury, so a');
@@ -586,8 +615,15 @@ async function main() {
     // 2026-08 records already carry, so a new record stays comparable with them; `caseName` is
     // the `--case` selector, which is a friendlier handle and could be renamed without
     // silently making old and new numbers look like the same measuring stick.
-    case: path.basename(require.resolve(caseModule), '.js'), caseName, fingerprint: spec.fingerprint, family: synthetic ? 'synthetic' : family,
-    model: synthetic ? 'self-test' : (env.FELIX_JUDGE_MODEL || null), k: args.k, valid: valid.length, errors,
+    // `family` and `model` are the seats that GRADED, read off the judge — not FELIX_JUDGE_FAMILY
+    // and FELIX_JUDGE_MODEL, which say what was asked for and go on saying it when a vendor is
+    // skipped for a missing key. `seats` carries requested/active/skipped so a record can show the
+    // mismatch instead of hiding it. Records written before 2026-08-14 carry the env string here,
+    // and `calib-subtle-path.json` was corrected by hand (`seatNote`).
+    case: path.basename(require.resolve(caseModule), '.js'), caseName, fingerprint: spec.fingerprint,
+    family: graders.join(','),
+    model: bench.active.map((s) => s.model).join(',') || null,
+    seats: bench, k: args.k, valid: valid.length, errors,
     promptTokens, greens, groundTruth, candidate: CASE.candidate === true,
     // On a contested fixture the false-green fields are NULL, not merely renamed. A reader (or a
     // script) that reaches for `pHat` on a contested record gets nothing rather than a number that
