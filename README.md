@@ -366,6 +366,33 @@ Two limits worth knowing, neither hidden:
 - Criteria may live in a **linked issue**, and editing an issue fires no pull-request event at
   all. Nothing re-checks the pin until the next run on that PR.
 
+#### The number 10 is arithmetic, not measurement — how to actually check it
+
+`maxJudgeRuns: 10` rests on a per-run false-pass rate nobody has observed. `scripts/smoke-judge-variance.js`
+observes it: it re-rolls one **frozen** diff + spec (`test/fixtures/judge-variance-case.js`) through
+the real judge and reports how much the answer moved. Both shipped providers already send
+`temperature: 0`, so it measures production config — temp 0 bounds the sampler, it does not make a
+vendor's kernels deterministic.
+
+```bash
+npm run measure:variance                                   # plan + cost, calls nothing
+node scripts/smoke-judge-variance.js --spend --k 600       # a result with actual power
+npm run test:variance                                      # rehearse the maths offline, free
+```
+
+**It does not spend by default.** Every roll is a live billed call, so without `--spend` it prints
+the measured prompt size, the call count and a cost estimate, and exits having called nothing. It is
+not part of `npm test`.
+
+The result to be careful with is the *clean* one. Zero flips in 20 rolls reads like determinism and
+is not: zero events at k=20 still allows a per-roll rate near 15%, and at 15% ten rolls find a false
+green more often than not. The report says so on every run rather than leaving you to remember it,
+and names the k a real conclusion needs — **~587 rolls** to defend a cap of 10 at a 5% ceiling,
+roughly a dollar at current prices. Under-powered null results are the failure mode this script is
+shaped around, which is why `npm run test:variance` drives the whole report against a *seeded* judge
+at a known flip rate and asserts the arithmetic recovers it. Rehearsals are stamped `synthetic` in
+both the report and the JSON record so one can never be filed as a measurement.
+
 #### Re-checking the pin when the description is edited
 
 The freeze only fires when Felix runs, and Felix runs on the events *your* workflow lists. A
