@@ -1,8 +1,12 @@
 /**
- * judge-variance-subtle-cache-case.js — CANDIDATE. Subtle-but-unmet, pivot spans TWO hunks.
+ * judge-variance-subtle-cache-case.js — FROZEN. Subtle-but-unmet, pivot spans TWO hunks.
  *
- * ⚠️ NOT FROZEN YET. See `candidate: true`. A candidate may be reshaped while it is calibrated;
- * the freeze begins at full-k measurement. Nothing has been recorded against this one.
+ * ✅ FROZEN 2026-08-14, at calibration 5/30 (16.7%) on a solo openai seat. It landed off both
+ * rails, which is what a candidate is probed for, so this is the one a full run was spent on.
+ * DO NOT RESHAPE IT. The diff, the criteria and the `expected` labels are now the measuring stick
+ * a recorded number is quoted against — edit any of them and every record taken against this
+ * fixture silently stops being comparable. If a different defect shape needs measuring, author a
+ * NEW candidate; that is why the registry takes a name.
  *
  * ── WHY A SECOND CANDIDATE, AND WHY THIS SHAPE ───────────────────────────────────────────────
  *
@@ -132,4 +136,6 @@ const tier1 = [
   { name: 'secrets scan', hard: true, status: 'pass', detail: 'no secrets detected in the diff' },
 ];
 
-module.exports = { prTitle, criteriaBody, diff, tier1, expected, candidate: true };
+// No `candidate` flag: frozen. Re-adding it to justify an edit would be the same move as editing
+// the fixture, one indirection out — a number already exists that was taken against this text.
+module.exports = { prTitle, criteriaBody, diff, tier1, expected };
