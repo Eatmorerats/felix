@@ -368,6 +368,12 @@ Two limits worth knowing, neither hidden:
 
 #### The number 10, measured — 2026-08-14
 
+> ⚠️ **AMENDED the same day — read "The subtle class, measured" below before quoting anything in
+> this section.** Everything here remains true *of the decisive case*. A second frozen fixture,
+> rolled at full power, put the false-green rate at **14.2%** on a subtle defect — which means the
+> cap was never the control for that class, at 10 or at any other number. This section is the
+> narrow result; that one is the scope.
+
 **`maxJudgeRuns: 10` is no longer a guess.** The frozen reference case was rolled **600 times**
 through the real OpenAI seat at temperature 0: **600 valid rolls, 0 errors, ZERO false greens.**
 Exact Clopper-Pearson one-sided 95% upper bound on the per-roll false-green rate: **0.498%**. The
@@ -461,15 +467,13 @@ cases.** It caught the path-traversal prefix bug every single time; it ruled the
 on one roll in six, and those are unambiguous false greens — the criterion says "whenever" and the
 diff contains a path that changes the email without invalidating.
 
-⚠️ **What this does to the "keep 10" conclusion.** At 16.7%, ten rolls find a false green **83.8%**
-of the time. The 600-roll decisive-case bound stays true, but it does **not** generalise: `10` does
-not deliver a 5% ceiling for the subtle class. Read the scope carefully before amending anything —
-both numbers are k=30 on an **unfrozen candidate**, which is calibration, not measurement. The
-honest next step is to freeze `subtle-cache` and run it at full k. See "Which fixture is missing"
-for why the response would be an amendment rather than a retraction, and why it is *not* cutting
-the cap to 1.
+Both numbers are k=30 on **unfrozen candidates**, which is calibration, not measurement — they say
+which fixture is worth spending a full run on, nothing more. `subtle-cache` was then frozen and
+run at full power; see the next section for the number that can actually be quoted.
 
 Records: `calib-subtle-path.json`, `calib-subtle-cache.json` (both stamped `candidate: true`).
+`subtle-path` is **still a candidate** — 0/30 says only "≤ 9.5%", which is not a result, and it has
+never been spent against.
 
 ✅ **Defect found while running these, fixed 2026-08-14: the recorder mislabelled the seat.**
 `family` and the report's scope line were read from `FELIX_JUDGE_FAMILY`, not from the seats
@@ -488,11 +492,75 @@ was declared and unkeyed. `calib-subtle-path.json` was corrected by hand (`seatN
 `calib-subtle-cache.json` was run with `FELIX_JUDGE_FAMILY=openai`, so its label was already true.
 Records written from here on carry `seats` inline, so the mismatch is visible rather than assumed.
 
+#### The subtle class, measured — 2026-08-14. The cap was never the control here.
+
+`subtle-cache` was frozen (fingerprint `c4defc9849a5…`, unchanged from calibration) and rolled
+**598 times** — the k this script's own estimator prescribes — through the solo OpenAI seat at
+temperature 0. Record: `variance-2026-08-14-subtle-cache-openai-solo.json`.
+
+| | decisive case (600 rolls) | **subtle case (598 rolls)** |
+|---|---|---|
+| false greens | 0 / 600 | **85 / 598** |
+| point estimate | 0% | **14.2%** |
+| exact 95% upper bound | ≤ 0.498% | **≤ 16.78%** |
+| errors | 0 | 0 |
+
+**Both results are true. They are about different diffs, and the gap between them is the finding.**
+The same judge, same seat, same day, same temperature: flat zero on a decisively-unmet criterion,
+one-in-seven on a defect whose two halves are each individually correct.
+
+**The arithmetic that matters, and it is not "lower the cap".** At p = 14.2%, a **single** roll is
+already a 14.2% chance of a false green. There is no value of `maxJudgeRuns ≥ 1` that delivers a 5%
+ceiling for this class — the script's own branch prints "must drop to 1", and even 1 does not clear
+it. So this is **not** an argument for cutting the cap. It is the discovery that **the cap is the
+wrong instrument for this class of defect**, and was never doing the job this section originally
+credited it with.
+
+What `maxJudgeRuns` *does* do, stated at the size it actually is:
+
+- It bounds **amplification**. Re-rolling takes 14.2% to 78.4% across ten attempts. Capping the
+  re-rolls is a real and worthwhile damper on a cheap attack — it just is not a ceiling.
+- It bounds **cost**, which is its other, unglamorous job.
+- **Leaving it at 10 remains the right call.** Attempts are per-PR and lifetime, so ordinary
+  iterative pushes burn them; a cap of 1 breaks legitimate use and, per the arithmetic above, buys
+  no ceiling in exchange. Cutting it would be a real usability cost for a benefit that does not
+  exist.
+
+**What carries the ceiling instead, and how much of it is measured:**
+
+- **The unanimity jury.** `mergeJuryResults` needs *every* seated vendor to rule a criterion met, so
+  a jury false green requires the OpenAI seat to have flipped *too*: the jury rate is **≤ 14.2%**,
+  and that inequality is the only thing measured. How far below is **unmeasured**, and there is a
+  reason not to assume much: two frontier LLMs shown the same diff are not independent draws, and a
+  defect in the *relationship between hunks* is exactly the kind of blind spot that could be shared.
+  Running `subtle-cache` against a real two-vendor jury is the next measurement worth buying.
+- **Human review.** For the subtle class this is currently the backstop, not a formality. Felix's
+  own doctrine already says the judge is one input to a human decision; this number is what that
+  sentence costs when it is ignored.
+- **Criterion quality.** The pivot criterion says the cache is invalidated "**whenever**" an email
+  changes. That is a well-written, checkable criterion, and the judge still missed it once in seven
+  because checking it required relating two hunks. Criteria that can be verified hunk-locally are
+  graded far more reliably — 598/598 stable on both controls in this very run.
+
+**Two smaller things this run settled**, both of which the previous section had to hedge:
+
+- **Non-determinism is now evidenced inline.** 311 distinct judge texts across 598 rolls, in *this*
+  record's own `textDigest` fields — not inferred from a separate probe, as the 600-roll result had
+  to be.
+- **Controls did not mask the pivot.** Verdict-level greens (85) equal pivot flips (85) exactly, and
+  both control criteria came back 598/598 stable. The one-pivot fixture rule works: the measured
+  verdict rate *is* the pivot's rate, with nothing driving it toward zero.
+
+Calibration predicted this honestly (5/30 → 16.7%, bound ≤ 31.9%; measured 14.2%, bound ≤ 16.78%),
+which is the case for keeping the ~30-roll probe mandatory before any freeze.
+
 #### Which fixture is missing
 
-A **subtle-but-unmet** case: ground truth firmly NOT VERIFIED on careful reading, but with a defect
+`subtle-cache` closed the subtle-but-unmet gap; `subtle-path` is authored but still a candidate, and
+the two-vendor jury run is now the open measurement. Design notes for whoever builds the next one —
+a **subtle-but-unmet** case is ground truth firmly NOT VERIFIED on careful reading, with a defect
 that needs two steps to see (an edge-case comparison, a flaw spanning two hunks, a default that
-changes a path). Design notes for whoever builds it:
+changes a path):
 
 - **One pivot, decisive controls, no second unmet criterion.** Verdict-level VERIFIED needs *every*
   criterion to come back met, so the existing fixture's decisively-unmet Map criterion drives
@@ -503,12 +571,11 @@ changes a path). Design notes for whoever builds it:
   searches diff-space for high p, so the measurement should too. The freeze rule starts when
   full-k measurement starts, not during authoring. Add it as a **new file**; the two existing
   fixtures never move.
-- **If it comes back high** (say 20%), the decisive-case number stays true but "10 clears a 5%
-  ceiling" stops being defensible in general. The honest response is an amendment, not a
-  retraction, and *not* cutting the cap to 1 — attempts are per-PR and lifetime, so ordinary
-  iterative pushes burn them; a cap of 1 breaks legitimate use. It would mean the cap only
-  functions in the small-p regime and the ceiling for the subtle class is carried by the unanimity
-  jury and human review.
+- **This was written before `subtle-cache` was run, predicting "if it comes back high (say 20%)".**
+  It came back at 14.2%, and the prediction of what to do about it held: an amendment, not a
+  retraction, and not cutting the cap. Left here as written because a pre-registered expectation
+  that survives contact with the number is worth more than one edited afterwards to match it. See
+  "The subtle class, measured" for what the number actually licensed.
 
 #### How to re-check it
 
