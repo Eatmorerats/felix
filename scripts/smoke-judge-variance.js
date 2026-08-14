@@ -87,6 +87,10 @@ const CASES = {
   // Ground truth CONTESTED. Not a measuring stick — it is the negative control the ground-truth
   // refusal is tested against, and rolling it for real bounds nothing about the cap. See its header.
   contested: '../test/fixtures/judge-variance-contested-case',
+  // CANDIDATES — not frozen. Subtle-but-unmet, the class an attacker would actually submit, and
+  // the gap between the two cases above. Being calibrated; see their headers and `candidate: true`.
+  'subtle-path': '../test/fixtures/judge-variance-subtle-path-case',
+  'subtle-cache': '../test/fixtures/judge-variance-subtle-cache-case',
 };
 const DEFAULT_CASE = 'decisive';
 
@@ -375,6 +379,14 @@ async function main() {
   }
   console.log(`  case        ${caseName}  ·  ${path.relative(process.cwd(), require.resolve(caseModule))}`);
   console.log(`  criteria    ${spec.criteria.length}  ·  fingerprint ${(spec.fingerprint || '').slice(0, 12)}`);
+  // A candidate is a fixture still being SHAPED to find the judge's flip point, so a number from
+  // one is a calibration reading, not a measurement — and the difference is invisible once the
+  // number is in a commit message. Said on every run, and stamped in the record.
+  if (CASE.candidate) {
+    console.log('  ⚠️ CANDIDATE — this fixture is NOT frozen. Numbers from it are CALIBRATION, not');
+    console.log('     a measurement: the diff may still be reshaped to find the judge\'s flip point.');
+    console.log('     Freeze it (drop `candidate: true`) before any run you intend to cite.');
+  }
   console.log(`  truth       ${groundTruth === 'decisive-unmet'
     ? 'DECISIVE — at least one criterion no careful reader calls met, so a VERIFIED roll is a FALSE green'
     : 'CONTESTED — no criterion is labelled unmet, so a VERIFIED roll is a DEFENSIBLE call, not a false green'}`);
@@ -576,7 +588,7 @@ async function main() {
     // silently making old and new numbers look like the same measuring stick.
     case: path.basename(require.resolve(caseModule), '.js'), caseName, fingerprint: spec.fingerprint, family: synthetic ? 'synthetic' : family,
     model: synthetic ? 'self-test' : (env.FELIX_JUDGE_MODEL || null), k: args.k, valid: valid.length, errors,
-    promptTokens, greens, groundTruth,
+    promptTokens, greens, groundTruth, candidate: CASE.candidate === true,
     // On a contested fixture the false-green fields are NULL, not merely renamed. A reader (or a
     // script) that reaches for `pHat` on a contested record gets nothing rather than a number that
     // means something else — the same reasoning as the printed refusal. The observed rate is still

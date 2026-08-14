@@ -446,6 +446,39 @@ The **attacker-optimal** diff is not contested — it is one that is *actually w
 plausible*. Assume it is p-optimized, since an author can rehearse against `preflight --judge` on
 their own key before ever opening a PR.
 
+#### Calibration, 2026-08-14 — the subtle class is NOT the decisive class
+
+Two subtle-but-unmet candidates were authored and probed at k=30 on the solo OpenAI seat. They do
+not agree, and the disagreement is the point:
+
+| candidate | pivot defect | greens | rate |
+|---|---|---|---|
+| `subtle-path` | `startsWith` prefix check missing a separator — one line | **0/30** | 0% (p ≤ 9.5%) |
+| `subtle-cache` | a second code path in the SAME diff writes `email` without invalidating — two hunks | **5/30** | **16.7%** (p ≤ 31.9%) |
+
+**The judge is weak to defects that live in the relationship between hunks, not to single-line edge
+cases.** It caught the path-traversal prefix bug every single time; it ruled the cache criterion MET
+on one roll in six, and those are unambiguous false greens — the criterion says "whenever" and the
+diff contains a path that changes the email without invalidating.
+
+⚠️ **What this does to the "keep 10" conclusion.** At 16.7%, ten rolls find a false green **83.8%**
+of the time. The 600-roll decisive-case bound stays true, but it does **not** generalise: `10` does
+not deliver a 5% ceiling for the subtle class. Read the scope carefully before amending anything —
+both numbers are k=30 on an **unfrozen candidate**, which is calibration, not measurement. The
+honest next step is to freeze `subtle-cache` and run it at full k. See "Which fixture is missing"
+for why the response would be an amendment rather than a retraction, and why it is *not* cutting
+the cap to 1.
+
+Records: `calib-subtle-path.json`, `calib-subtle-cache.json` (both stamped `candidate: true`).
+
+⚠️ **Defect found while running these: the recorder mislabels the seat.** `family` and the report's
+scope line are read from `FELIX_JUDGE_FAMILY`, not from the seats `createJudge` actually built. With
+`FELIX_JUDGE_FAMILY=openai,gemini` and no `GEMINI_API_KEY`, judge.js skips the gemini seat and logs
+it — but the report still printed "measured against a 2-vendor JURY (openai,gemini)" for a run that
+was solo OpenAI. `calib-subtle-path.json` was corrected by hand (`seatNote`). **Fix this before any
+run intended to be cited** — a scope note that overstates the grader is worse than none, and this
+one overstates it in the direction that makes a bound look stronger.
+
 #### Which fixture is missing
 
 A **subtle-but-unmet** case: ground truth firmly NOT VERIFIED on careful reading, but with a defect

@@ -1,0 +1,397 @@
+{
+  "synthetic": false,
+  "syntheticRate": null,
+  "case": "judge-variance-subtle-path-case",
+  "caseName": "subtle-path",
+  "fingerprint": "58a4478f161bcba27e65b049deab6243bf20f87d95eba261b8365f50b0875aea",
+  "family": "openai",
+  "model": null,
+  "k": 30,
+  "valid": 30,
+  "errors": 0,
+  "promptTokens": 901,
+  "greens": 0,
+  "groundTruth": "decisive-unmet",
+  "candidate": true,
+  "pHat": 0,
+  "pUpper95": 0.09503385285530419,
+  "pVerified": null,
+  "pVerifiedUpper95": null,
+  "capRisk": {
+    "rolls10": 0,
+    "rolls10Upper95": 0.6315968501359616,
+    "rolls10UnionUpper95": 0.9503385285530419
+  },
+  "powerNeeded": {
+    "perRoll": 0.005116196891823743,
+    "perRollUnion": 0.005,
+    "rollsNeededCompound": 585,
+    "rollsNeeded": 598
+  },
+  "perCriterion": [
+    {
+      "text": "a download request cannot read files outside the uploads directory",
+      "expected": "unmet",
+      "votes": 30,
+      "met": 0,
+      "unmet": 30,
+      "flips": 0,
+      "flipRate": 0,
+      "flipRateUpper95": 0.09503385285530419
+    },
+    {
+      "text": "a rejected request returns HTTP 403",
+      "expected": "met",
+      "votes": 30,
+      "met": 30,
+      "unmet": 0,
+      "flips": 0,
+      "flipRate": 0,
+      "flipRateUpper95": 0.09503385285530419
+    },
+    {
+      "text": "the response sets Content-Disposition with the requested filename",
+      "expected": "met",
+      "votes": 30,
+      "met": 30,
+      "unmet": 0,
+      "flips": 0,
+      "flipRate": 0,
+      "flipRateUpper95": 0.09503385285530419
+    }
+  ],
+  "rolls": [
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "3d11aa807926"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "969cda74d853"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "cf1c92381eb4"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "5a918fc9eb55"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "c28ad8b709b6"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "90f2657e8c34"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "8d80b7ca10c7"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "0986d80f424f"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "57b720906138"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "737fd8e45e3c"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "d4fe9c3c43fc"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "44f16e409754"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "531bbd137d76"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "04ae99f0751c"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "ae557ce81496"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "1ebd53e79115"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "2f533a34f7a3"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "d5dc7b1130ac"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "c6e249375a99"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "215da2fb1762"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "92d8c3bf10e6"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "2fdc8b81999e"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "0782246f3362"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "b42154747864"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "2896c54691cd"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "342042550876"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "c75195996dc7"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "95948928832b"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "298b1345a4db"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "a download request cannot read files outside the uploads directory": false,
+        "a rejected request returns HTTP 403": true,
+        "the response sets Content-Disposition with the requested filename": true
+      },
+      "textDigest": "9ab9df616abb"
+    }
+  ],
+  "familyEnvDeclared": "openai,gemini",
+  "seatNote": "DEFECT IN THE RECORDER, not in this run: family/scope are taken from FELIX_JUDGE_FAMILY, not from the seats createJudge actually built. GEMINI_API_KEY was absent, so the gemini seat was skipped (judge.js logs \"gemini judge seat skipped\") and this ran SOLO OPENAI while the report printed \"2-vendor JURY\". Corrected by hand here; the rolls are untouched. Fix the script before any run that is meant to be cited."
+}

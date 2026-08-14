@@ -1,0 +1,395 @@
+{
+  "synthetic": false,
+  "syntheticRate": null,
+  "case": "judge-variance-subtle-cache-case",
+  "caseName": "subtle-cache",
+  "fingerprint": "c4defc9849a5bde32e3bd6263cf94529ba33afddaf3fc28f13d8b0d2d69b3df4",
+  "family": "openai",
+  "model": null,
+  "k": 30,
+  "valid": 30,
+  "errors": 0,
+  "promptTokens": 1027,
+  "greens": 5,
+  "groundTruth": "decisive-unmet",
+  "candidate": true,
+  "pHat": 0.16666666666666666,
+  "pUpper95": 0.3189711819473151,
+  "pVerified": null,
+  "pVerifiedUpper95": null,
+  "capRisk": {
+    "rolls10": 0.8384944171101543,
+    "rolls10Upper95": 0.9785387557758028,
+    "rolls10UnionUpper95": 3.189711819473151
+  },
+  "powerNeeded": {
+    "perRoll": 0.005116196891823743,
+    "perRollUnion": 0.005,
+    "rollsNeededCompound": 585,
+    "rollsNeeded": 598
+  },
+  "perCriterion": [
+    {
+      "text": "the cached profile is invalidated whenever a user's email changes",
+      "expected": "unmet",
+      "votes": 30,
+      "met": 5,
+      "unmet": 25,
+      "flips": 5,
+      "flipRate": 0.16666666666666666,
+      "flipRateUpper95": 0.3189711819473151
+    },
+    {
+      "text": "a cache miss falls through to the database",
+      "expected": "met",
+      "votes": 30,
+      "met": 30,
+      "unmet": 0,
+      "flips": 0,
+      "flipRate": 0,
+      "flipRateUpper95": 0.09503385285530419
+    },
+    {
+      "text": "cached entries expire after 5 minutes",
+      "expected": "met",
+      "votes": 30,
+      "met": 30,
+      "unmet": 0,
+      "flips": 0,
+      "flipRate": 0,
+      "flipRateUpper95": 0.09503385285530419
+    }
+  ],
+  "rolls": [
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "45f5172c2ba5"
+    },
+    {
+      "ok": true,
+      "verdict": "VERIFIED",
+      "cause": "all_clear",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": true,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "d899e151c835"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "7deff3019246"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "1d624ea19f84"
+    },
+    {
+      "ok": true,
+      "verdict": "VERIFIED",
+      "cause": "all_clear",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": true,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "31e77df3c616"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "b3efee0be220"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "70e2c0303f74"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "1d624ea19f84"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "a2c728ac8914"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "00c2d3bbc3f2"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "ff116d32a209"
+    },
+    {
+      "ok": true,
+      "verdict": "VERIFIED",
+      "cause": "all_clear",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": true,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "f7257aa33f68"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "1d624ea19f84"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "ea988a55f205"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "264431a64cae"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "32ceb48f8b32"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "cf37f0c6c07c"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "7deff3019246"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "45f5172c2ba5"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "8572f2de7cc9"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "b0cdce931829"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "a2c728ac8914"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "b2c86f9e47ee"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "f7b00674bf79"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "e86d0ce8f923"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "29eb051d5281"
+    },
+    {
+      "ok": true,
+      "verdict": "VERIFIED",
+      "cause": "all_clear",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": true,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "d56178e3d920"
+    },
+    {
+      "ok": true,
+      "verdict": "VERIFIED",
+      "cause": "all_clear",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": true,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "16df10d096e6"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "f7b00674bf79"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the cached profile is invalidated whenever a user's email changes": false,
+        "a cache miss falls through to the database": true,
+        "cached entries expire after 5 minutes": true
+      },
+      "textDigest": "9d8b00ee7455"
+    }
+  ]
+}
