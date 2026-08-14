@@ -72,7 +72,20 @@ const { estimateTokens, paceMs, promptBudgetTokens } = require('../src/engine/bu
 const { PROVIDERS } = require('../src/engine/providers');
 const { buildSpec, criteriaCapChars } = require('../src/engine/spec');
 const { compose, VERDICTS } = require('../src/engine/verdict');
-const CASE = require('../test/fixtures/judge-variance-case');
+/**
+ * The frozen cases this script can roll, by `--case` name.
+ *
+ * A registry rather than a single require, because the record's `case` field is what tells a
+ * future reader WHICH measuring stick a number came from. It used to be the hardcoded string
+ * 'judge-variance-case' while the fixture itself was a hardcoded require — so pointing the script
+ * at a different fixture (by editing one line, which is how a second case would arrive) produced a
+ * record that named the wrong case. Two incomparable measurements filed under one name is the
+ * quietest way to lose a measurement. The name is now derived from the same place the module is.
+ */
+const CASES = {
+  decisive: '../test/fixtures/judge-variance-case',
+};
+const DEFAULT_CASE = 'decisive';
 
 // Rough, and labelled rough wherever it is printed. Vendor pricing moves; the TOKEN counts above
 // it are measured and do not. Override with FELIX_VARIANCE_USD_PER_MTOK if yours differs.
@@ -83,9 +96,10 @@ const ASSUMED_USD_PER_MTOK = 2.0; // gpt-4.1 input, checked 2026-08
 const ALPHA = 0.05;
 
 function parseArgs(argv) {
-  const a = { k: 20, spend: false, json: false, out: null, selfTest: null };
+  const a = { k: 20, spend: false, json: false, out: null, selfTest: null, case: DEFAULT_CASE };
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--spend') a.spend = true;
+    if (argv[i] === '--case') a.case = String(argv[++i] || '').trim();
+    else if (argv[i] === '--spend') a.spend = true;
     else if (argv[i] === '--json') a.json = true;
     else if (argv[i] === '--k') a.k = Number(argv[++i]);
     else if (argv[i] === '--out') a.out = argv[++i];
@@ -100,6 +114,22 @@ function parseArgs(argv) {
 }
 
 /**
+ * Resolve `--case` to a frozen fixture, or die naming what exists.
+ *
+ * Deliberately NOT tolerant of an unknown name. Silently falling back to the default would run the
+ * decisive case while the operator believed they were rolling a different one, and the record would
+ * agree with the script rather than with the operator — a wrong measurement that looks right is the
+ * one outcome this whole file is arranged against.
+ */
+function loadCase(name) {
+  if (!Object.prototype.hasOwnProperty.call(CASES, name)) {
+    console.error(`unknown --case "${name}". Known cases: ${Object.keys(CASES).join(', ')}.`);
+    process.exit(1);
+  }
+  return { name, module: CASES[name], data: require(CASES[name]) };
+}
+
+/**
  * A seeded synthetic judge for `--self-test`. Deterministic on purpose: a rehearsal whose numbers
  * move between runs cannot be asserted, and an assertion is the entire point of having one.
  *
@@ -107,7 +137,7 @@ function parseArgs(argv) {
  * false green at exactly that rate — and rules everything as the fixture's `expected` labels say
  * otherwise. So the report's recovered `pHat` should converge on `rate`.
  */
-function syntheticJudge(rate, criteria, { errorEvery = 0 } = {}) {
+function syntheticJudge(rate, criteria, CASE, { errorEvery = 0 } = {}) {
   let s = 0x2545f491; // fixed seed; xorshift32
   let roll = 0;
   const next = () => {
@@ -292,6 +322,8 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const env = process.env;
 
+  const { name: caseName, module: caseModule, data: CASE } = loadCase(args.case);
+
   const spec = buildSpec({ title: CASE.prTitle, body: CASE.criteriaBody }, [], [], {
     maxCriteriaChars: criteriaCapChars(promptBudgetTokens(env, PROVIDERS)),
   });
@@ -316,7 +348,7 @@ async function main() {
     console.log('  ══ SELF-TEST. No vendor is called and NOTHING here is a measurement. ══');
     console.log(`  ══ A seeded judge flips at ${pct(args.selfTest)}; the report must recover it. ══\n`);
   }
-  console.log(`  case        ${path.relative(process.cwd(), require.resolve('../test/fixtures/judge-variance-case'))}`);
+  console.log(`  case        ${caseName}  ·  ${path.relative(process.cwd(), require.resolve(caseModule))}`);
   console.log(`  criteria    ${spec.criteria.length}  ·  fingerprint ${(spec.fingerprint || '').slice(0, 12)}`);
   console.log(`  prompt      ~${promptTokens} tokens (${promptChars} chars), measured`);
   console.log(`  seat(s)     ${synthetic ? 'synthetic/self-test · seeded, no vendor' : `${family}  ·  temperature 0 (both shipped providers)`}`);
@@ -338,7 +370,7 @@ async function main() {
   );
   for (const w of walletWarnings) console.log(`  ${w}\n`);
   const judge = synthetic
-    ? syntheticJudge(args.selfTest, spec.criteria, { errorEvery: args.errorEvery })
+    ? syntheticJudge(args.selfTest, spec.criteria, CASE, { errorEvery: args.errorEvery })
     : createJudge(judgeEnv);
   if (!judge) {
     console.error(`no judge seat is keyed for family "${family}" — set the provider's API key.`);
@@ -485,7 +517,11 @@ async function main() {
     // First key, and never omitted when false: a rehearsal filed as a measurement is the one way
     // this script can do real damage.
     synthetic, syntheticRate: synthetic ? args.selfTest : null,
-    case: 'judge-variance-case', fingerprint: spec.fingerprint, family: synthetic ? 'synthetic' : family,
+    // Two fields on purpose. `case` is the fixture's MODULE basename and is what the two
+    // 2026-08 records already carry, so a new record stays comparable with them; `caseName` is
+    // the `--case` selector, which is a friendlier handle and could be renamed without
+    // silently making old and new numbers look like the same measuring stick.
+    case: path.basename(require.resolve(caseModule), '.js'), caseName, fingerprint: spec.fingerprint, family: synthetic ? 'synthetic' : family,
     model: synthetic ? 'self-test' : (env.FELIX_JUDGE_MODEL || null), k: args.k, valid: valid.length, errors,
     promptTokens, greens, pHat, pUpper95: pUpper,
     capRisk: { rolls10: atLeastOne(pHat, 10), rolls10Upper95: atLeastOne(pUpper, 10) },

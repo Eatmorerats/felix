@@ -2,6 +2,7 @@
   "synthetic": false,
   "syntheticRate": null,
   "case": "judge-variance-case",
+  "caseName": "decisive",
   "fingerprint": "97b07e2aec34a2fe1eeaae946e56c1c3aa49eba7b102d7c88043dfba16fe1047",
   "family": "openai",
   "model": null,
