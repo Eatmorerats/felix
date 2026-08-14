@@ -23,7 +23,7 @@
 const assert = require('assert');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { wilsonUpper, atLeastOne, power } = require('./smoke-judge-variance');
+const { wilsonUpper, atLeastOne, power, resolveJudgeEnv } = require('./smoke-judge-variance');
 
 let failures = 0;
 const ok = (name, detail = '') => console.log(`  ✓ PASS  ${name}${detail ? ` — ${detail}` : ''}`);
@@ -76,6 +76,22 @@ check('which round-trips: 10 rolls at that rate is exactly the 5% target',
 check('and demonstrating it takes ~587 rolls', p10.rollsNeeded === 587, `${p10.rollsNeeded}`);
 check('a SMALLER cap tolerates a HIGHER per-roll rate', power({ capRolls: 3 }).perRoll > p10.perRoll);
 assert.ok(true);
+
+console.log('\n[0b] which wallet a run spends from');
+// ~600 billed calls in one sitting. Charging that to the key CI grades PRs with would let one
+// measurement exhaust the budget every future PR depends on.
+const dedicated = resolveJudgeEnv({ OPENAI_API_KEY: 'ci', OPENAI_API_KEY_VARIANCE: 'mine' }, ['openai']);
+check('a dedicated variance key wins', dedicated.judgeEnv.OPENAI_API_KEY === 'mine');
+check('and it does not warn', dedicated.warnings.length === 0);
+const preflight = resolveJudgeEnv({ OPENAI_API_KEY: 'ci', OPENAI_API_KEY_PREFLIGHT: 'local' }, ['openai']);
+check('the pre-flight key is the next choice', preflight.judgeEnv.OPENAI_API_KEY === 'local');
+const shared = resolveJudgeEnv({ OPENAI_API_KEY: 'ci' }, ['openai']);
+check("CI's key still WORKS — refusing would be worse", shared.judgeEnv.OPENAI_API_KEY === 'ci');
+check('…but never quietly', shared.warnings.length === 1 && /SHARED KEY/.test(shared.warnings[0]));
+check('it names the fix, not just the problem', /OPENAI_API_KEY_VARIANCE/.test(shared.warnings[0]));
+check('the same rule applies per family, not just to openai',
+  resolveJudgeEnv({ GEMINI_API_KEY: 'ci', GEMINI_API_KEY_VARIANCE: 'mine' }, ['gemini']).judgeEnv.GEMINI_API_KEY === 'mine');
+check('an unkeyed family warns about nothing', resolveJudgeEnv({}, ['openai']).warnings.length === 0);
 
 console.log('\n[1] the default spends NOTHING, and the control proves the money path was not reached');
 const planned = run([]);

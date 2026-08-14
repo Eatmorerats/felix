@@ -169,6 +169,40 @@ function power({ capRolls, target = 0.05 }) {
 
 const pct = (x) => `${(x * 100).toFixed(1)}%`;
 
+/**
+ * Pick which wallet this run spends from, and say so when it is the wrong one.
+ *
+ * A full-power run is ~600 billed calls in one sitting. Charging that to the key CI grades pull
+ * requests with means one measurement can exhaust the budget every future PR depends on — the same
+ * failure `OPENAI_API_KEY_PREFLIGHT` exists to prevent for the local loop, arriving by a different
+ * door. So for each seated family the search order is:
+ *
+ *   <KEY>_VARIANCE   a key for exactly this, ideally with a hard $5 cap at the vendor
+ *   <KEY>_PREFLIGHT  the local-spend key that already exists for the same reason
+ *   <KEY>            CI's key — used, because refusing would be worse, but never quietly
+ *
+ * Returns the env the judge is built from, plus a warning when it fell all the way through. The
+ * vendor-side limit is the only cap this script cannot code around, and that is the recommendation.
+ */
+function resolveJudgeEnv(env, families) {
+  const out = { ...env };
+  const warnings = [];
+  for (const family of families) {
+    const provider = PROVIDERS[family];
+    if (!provider) continue;
+    const base = provider.apiKeyEnv;
+    if (env[`${base}_VARIANCE`]) out[base] = env[`${base}_VARIANCE`];
+    else if (env[`${base}_PREFLIGHT`]) out[base] = env[`${base}_PREFLIGHT`];
+    else if (env[base]) {
+      warnings.push(
+        `⚠️ SHARED KEY — this run spends the same ${base} CI grades pull requests with. Set `
+        + `${base}_VARIANCE to a key with a hard limit at the vendor; that is the only real cap.`
+      );
+    }
+  }
+  return { judgeEnv: out, warnings };
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const env = process.env;
@@ -213,9 +247,13 @@ async function main() {
     process.exit(0);
   }
 
+  const { judgeEnv, warnings: walletWarnings } = resolveJudgeEnv(
+    env, family.split(',').map((f) => f.trim().toLowerCase()).filter(Boolean)
+  );
+  for (const w of walletWarnings) console.log(`  ${w}\n`);
   const judge = synthetic
     ? syntheticJudge(args.selfTest, spec.criteria, { errorEvery: args.errorEvery })
-    : createJudge(env);
+    : createJudge(judgeEnv);
   if (!judge) {
     console.error(`no judge seat is keyed for family "${family}" — set the provider's API key.`);
     process.exit(1);
@@ -354,7 +392,7 @@ async function main() {
 // smoke-judge-variance-selftest.js rather than inferred through the report's prose. Inferring them
 // is how a bound that is merely the wrong shape survives: every ordering assertion still holds
 // while the printed percentage is wrong.
-module.exports = { wilsonUpper, atLeastOne, power };
+module.exports = { wilsonUpper, atLeastOne, power, resolveJudgeEnv };
 
 if (require.main === module) {
   main().catch((e) => {
