@@ -206,6 +206,44 @@ check('and it says KEEPING, never RAISING — the scope limit is in the output',
   /does NOT/.test(swept.out) && /license RAISING it/.test(swept.out));
 check('it no longer calls a prescribed-k clean sweep unmeasured', !/is UNMEASURED/.test(swept.out));
 
+console.log('\n[3c] a CONTESTED fixture is refused, in both directions');
+// The misreading this guard exists for: point the script at a case where every criterion is
+// defensibly met and it would report the judge AGREEING with a reasonable reader as a "false-green
+// rate" — then its own branch prescribes cutting maxJudgeRuns from a number about nothing. The
+// mirror error is quieter: a stable refusal on a contested case trips the licence line and blesses
+// keeping the cap. Both are checked, because only fixing the loud one is how the quiet one ships.
+const hotContested = run(['--case', 'contested', '--self-test', '0.4', '--k', '40', '--json']);
+const hc = json(hotContested.out);
+check('the run completed', hotContested.status === 0, `exit ${hotContested.status}`);
+check('ground truth is derived, not assumed', hc.groundTruth === 'contested', hc.groundTruth);
+check('and it is stated in the header', /truth\s+CONTESTED/.test(hotContested.out));
+check('the false-green section REFUSES to print', /REFUSED\. This fixture cannot support/.test(hotContested.out));
+check('and never calls the number a false-green rate', /That is NOT a false-green rate/.test(hotContested.out));
+check('greens WERE observed, so this is a refusal and not an empty run', hc.greens > 0, `${hc.greens} of ${hc.valid}`);
+check('the cap-cutting branch never fires', !/ALREADY TOO GENEROUS/.test(hotContested.out));
+check('nor does the licence branch', !/licenses KEEPING/.test(hotContested.out));
+check('the licence section refuses in BOTH directions', /NOTHING ABOUT THE CAP, in either direction/.test(hotContested.out));
+// NULL, not renamed. A renamed percentage in the same slot gets quoted as the old one.
+check('pHat is null on the record, not merely renamed', hc.pHat === null && hc.pUpper95 === null);
+check('capRisk is null', hc.capRisk === null);
+check('the observed rate survives under a name that says only what it is',
+  hc.pVerified > 0 && hc.pVerifiedUpper95 > hc.pVerified, `pVerified = ${(hc.pVerified * 100).toFixed(1)}%`);
+// The label-free half must be UNAFFECTED — the guard gates the cap argument, not the variance stats.
+check('per-criterion variance still reported — the guard gates conclusions, not measurement',
+  hc.perCriterion.length === 3 && hc.perCriterion.some((c) => c.flips > 0));
+check('and the decisive case is untouched by any of this',
+  c.groundTruth === 'decisive-unmet' && c.pHat === 0 && c.capRisk !== null);
+// A clean sweep on a contested case must ALSO refuse — the quiet direction.
+const coldContested = run(['--case', 'contested', '--self-test', '0', '--k', '598', '--json']);
+check('a full-power CLEAN sweep on a contested case licenses nothing either',
+  !/licenses KEEPING/.test(coldContested.out) && /NOTHING ABOUT THE CAP/.test(coldContested.out));
+check('…even though the same k on the decisive case does license keeping',
+  /licenses KEEPING/.test(swept.out));
+// And the selector itself: a typo must not silently roll a different case.
+const badCase = run(['--case', 'borderline']);
+check('an unknown --case exits 1 rather than falling back to the default', badCase.status === 1, `exit ${badCase.status}`);
+check('and names what exists', /Known cases: decisive, contested/.test(badCase.out));
+
 console.log('\n[4] a vendor that FAILED is not a vendor that voted');
 // Folding errors into the denominator would understate the false-green rate — the one direction
 // this script must never be wrong in, since the whole output is an argument about a safety cap.

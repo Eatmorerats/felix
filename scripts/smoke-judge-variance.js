@@ -84,6 +84,9 @@ const { compose, VERDICTS } = require('../src/engine/verdict');
  */
 const CASES = {
   decisive: '../test/fixtures/judge-variance-case',
+  // Ground truth CONTESTED. Not a measuring stick — it is the negative control the ground-truth
+  // refusal is tested against, and rolling it for real bounds nothing about the cap. See its header.
+  contested: '../test/fixtures/judge-variance-contested-case',
 };
 const DEFAULT_CASE = 'decisive';
 
@@ -332,6 +335,28 @@ async function main() {
     process.exit(1);
   }
 
+  // ── GROUND TRUTH, DERIVED — the guard on what this run is allowed to conclude ─────────────
+  //
+  // Everything below the per-criterion table is an argument about a SAFETY CAP, and it only holds
+  // if a VERIFIED roll is WRONG. That is a property of the fixture, not of the arithmetic: on a
+  // case whose criteria are all defensibly met, a VERIFIED roll is a correct call, and counting
+  // those as "false greens" would manufacture a cap change out of the judge agreeing with a
+  // reasonable reader. Both directions of that misreading are live in this script's own branches —
+  // a high rate trips "10 is ALREADY TOO GENEROUS" and prescribes cutting the cap; a zero rate
+  // trips the licence line and blesses keeping it. Neither knew anything about ground truth.
+  //
+  // So it is derived, from the fixture's own `expected` labels, and a contested case is REFUSED
+  // rather than renamed: a renamed number still gets quoted, a section that never prints cannot be.
+  // This is a deliberate softening of the fixture doctrine that "nothing branches on expected" —
+  // that doctrine protects the VARIANCE statistics, which stay label-free. The licence prose was
+  // already asserting a ground truth in English; checking it is strictly better than asserting it.
+  const labels = spec.criteria.map((c) => CASE.expected[typeof c === 'string' ? c : c.text]);
+  if (labels.some((l) => !l)) {
+    console.error('a criterion has no `expected` label — the fixture and buildSpec have drifted apart.');
+    process.exit(1);
+  }
+  const groundTruth = labels.includes('unmet') ? 'decisive-unmet' : 'contested';
+
   const input = { prTitle: CASE.prTitle, criteria: spec.criteria, diff: CASE.diff, tier1: CASE.tier1 };
   const promptChars = buildPrompt({ ...input, maxPromptTokens: promptBudgetTokens(env, PROVIDERS) }).length;
   const promptTokens = estimateTokens(buildPrompt({ ...input, maxPromptTokens: promptBudgetTokens(env, PROVIDERS) }));
@@ -350,6 +375,9 @@ async function main() {
   }
   console.log(`  case        ${caseName}  ·  ${path.relative(process.cwd(), require.resolve(caseModule))}`);
   console.log(`  criteria    ${spec.criteria.length}  ·  fingerprint ${(spec.fingerprint || '').slice(0, 12)}`);
+  console.log(`  truth       ${groundTruth === 'decisive-unmet'
+    ? 'DECISIVE — at least one criterion no careful reader calls met, so a VERIFIED roll is a FALSE green'
+    : 'CONTESTED — no criterion is labelled unmet, so a VERIFIED roll is a DEFENSIBLE call, not a false green'}`);
   console.log(`  prompt      ~${promptTokens} tokens (${promptChars} chars), measured`);
   console.log(`  seat(s)     ${synthetic ? 'synthetic/self-test · seeded, no vendor' : `${family}  ·  temperature 0 (both shipped providers)`}`);
   console.log(`  rolls       ${args.k}`);
@@ -444,6 +472,7 @@ async function main() {
   // The fixture contains a criterion no careful reader calls met. A roll that returns VERIFIED
   // therefore IS the false green a resampling attack is fishing for — no interpretation needed.
   const greens = valid.filter((r) => r.verdict === VERDICTS.VERIFIED).length;
+  const contested = groundTruth === 'contested';
   const pHat = valid.length ? greens / valid.length : 0;
   const pUpper = clopperPearsonUpper(greens, valid.length);
 
@@ -457,23 +486,47 @@ async function main() {
   }
 
   console.log('\n' + '─'.repeat(78));
-  console.log(`${TAG}Verdict-level false-green rate — the number the cap depends on`);
-  console.log('─'.repeat(78));
-  if (synthetic) console.log(`  REHEARSAL. The seeded judge was set to ${pct(args.selfTest)}; anything below is arithmetic, not evidence.`);
-  console.log(`  VERIFIED on ${greens} of ${valid.length} roll(s) of a case a reviewer calls NOT VERIFIED.`);
-  console.log(`  point estimate p = ${pct(pHat)}   ·   exact (Clopper-Pearson) one-sided 95% bound p ≤ ${pctFine(pUpper)}`);
-  console.log('');
-  console.log('  Chance of at least one false green, if an attacker just re-rolls:');
-  for (const n of [1, 3, 5, 10, 20]) {
-    console.log(`    ${String(n).padStart(2)} roll(s):  ${pct(atLeastOne(pHat, n)).padStart(6)} at the point estimate `
-      + `·  up to ${pct(atLeastOne(pUpper, n))} at the upper bound`);
+  if (contested) {
+    // THE REFUSAL, and it is a refusal rather than a rename on purpose: a renamed percentage in
+    // the same slot on the same page gets quoted as the old one inside a month. A section that
+    // does not print cannot be quoted at all.
+    console.log(`${TAG}Verdict-level rate — REFUSED. This fixture cannot support a cap conclusion.`);
+    console.log('─'.repeat(78));
+    console.log(`  VERIFIED on ${greens} of ${valid.length} roll(s). That is NOT a false-green rate.`);
+    console.log('');
+    console.log('  No criterion here is labelled `unmet`, so this fixture\'s ground truth is CONTESTED —');
+    console.log('  a VERIFIED ruling is a defensible call, not the event maxJudgeRuns exists to bound.');
+    console.log('  Counting these as false greens would manufacture a cap change out of the judge');
+    console.log('  agreeing with a reasonable reader. The mirror error is just as wrong: a stable');
+    console.log('  REFUSAL on a contested case licenses keeping the cap no more than it licenses');
+    console.log('  cutting it. Neither number is about the attack.');
+    console.log('');
+    console.log('  The cap argument needs a fixture with at least one DECISIVELY UNMET criterion.');
+    console.log('  What this run does tell you is in the per-criterion table above — how far the');
+    console.log('  judge moves on identical input. That statistic is label-free and it stands.');
+  } else {
+    console.log(`${TAG}Verdict-level false-green rate — the number the cap depends on`);
+    console.log('─'.repeat(78));
+    if (synthetic) console.log(`  REHEARSAL. The seeded judge was set to ${pct(args.selfTest)}; anything below is arithmetic, not evidence.`);
+    console.log(`  VERIFIED on ${greens} of ${valid.length} roll(s) of a case a reviewer calls NOT VERIFIED.`);
+    console.log(`  point estimate p = ${pct(pHat)}   ·   exact (Clopper-Pearson) one-sided 95% bound p ≤ ${pctFine(pUpper)}`);
+    console.log('');
+    console.log('  Chance of at least one false green, if an attacker just re-rolls:');
+    for (const n of [1, 3, 5, 10, 20]) {
+      console.log(`    ${String(n).padStart(2)} roll(s):  ${pct(atLeastOne(pHat, n)).padStart(6)} at the point estimate `
+        + `·  up to ${pct(atLeastOne(pUpper, n))} at the upper bound`);
+    }
   }
 
   console.log('\n' + '─'.repeat(78));
   console.log(`${TAG}What this does and does not license`);
   console.log('─'.repeat(78));
   if (synthetic) console.log('  NOTHING. This was a rehearsal of the arithmetic. Re-run with --spend for a measurement.');
-  if (greens === 0) {
+  if (contested) {
+    console.log('  NOTHING ABOUT THE CAP, in either direction. Ground truth here is contested, so');
+    console.log('  neither a green nor a refusal is evidence about a resampling attack. Use a');
+    console.log('  decisively-unmet fixture for that; use this one to watch the judge move.');
+  } else if (greens === 0) {
     // Both bars, and the run must clear the WEAKER-ASSUMPTION one to count. The union bound
     // (10·p ≤ 5%) assumes nothing about independence between rolls; the compounding form does.
     const clearsUnion = pUpper * 10 <= 0.05;
@@ -523,8 +576,17 @@ async function main() {
     // silently making old and new numbers look like the same measuring stick.
     case: path.basename(require.resolve(caseModule), '.js'), caseName, fingerprint: spec.fingerprint, family: synthetic ? 'synthetic' : family,
     model: synthetic ? 'self-test' : (env.FELIX_JUDGE_MODEL || null), k: args.k, valid: valid.length, errors,
-    promptTokens, greens, pHat, pUpper95: pUpper,
-    capRisk: { rolls10: atLeastOne(pHat, 10), rolls10Upper95: atLeastOne(pUpper, 10) },
+    promptTokens, greens, groundTruth,
+    // On a contested fixture the false-green fields are NULL, not merely renamed. A reader (or a
+    // script) that reaches for `pHat` on a contested record gets nothing rather than a number that
+    // means something else — the same reasoning as the printed refusal. The observed rate is still
+    // recorded, under a name that says only what it is.
+    pHat: contested ? null : pHat,
+    pUpper95: contested ? null : pUpper,
+    pVerified: contested ? pHat : null,
+    pVerifiedUpper95: contested ? pUpper : null,
+    capRisk: contested ? null
+      : { rolls10: atLeastOne(pHat, 10), rolls10Upper95: atLeastOne(pUpper, 10), rolls10UnionUpper95: pUpper * 10 },
     powerNeeded: need, perCriterion, rolls,
   };
   if (args.json) console.log(JSON.stringify(record, null, 2));

@@ -377,16 +377,25 @@ Record: `variance-2026-08-openai-solo.json`.
 
 What that does **not** license, and the distinction is the whole point:
 
-- It is **one case, and a decisively-unmet one.** The cap exists for *borderline* cases, where the
-  flip rate is highest and where a resubmitting agent actually operates. This result supports
-  **keeping** 10. It does not support **raising** it. A borderline fixture is the missing measurement.
+- It is **one case, and a decisively-unmet one.** This result supports **keeping** 10. It does not
+  support **raising** it. The missing measurement is a **subtle-but-unmet** case — see
+  "Which fixture is missing" below, which is *not* the borderline one you might expect.
 - It is the **solo OpenAI seat**. That still bounds the two-vendor jury, because `mergeJuryResults`
   requires unanimity for a criterion to be met — a jury false green needs the OpenAI seat to have
   flipped too. It bounds nothing about a **gemini-only** seat.
-- **Temperature 0 did not make the judge deterministic.** A 30-roll probe returned **26 distinct
-  judge texts**. Had the outputs been byte-identical the bound would have been fiction — one
-  computation replayed 600 times, not 600 draws. The JSON record now stores a `textDigest` per roll
-  so this is checkable rather than assumed.
+- **Temperature 0 did not make the judge deterministic.** A separate 30-roll probe returned **26
+  distinct judge texts**. Had the outputs been byte-identical the bound would have been fiction —
+  one computation replayed 600 times, not 600 draws. ⚠️ Be precise about what is evidence for what:
+  the `textDigest` field **postdates the 600-roll run**, so all 600 digests in
+  `variance-2026-08-openai-solo.json` are `null`. The diversity evidence comes from
+  `variance-diversity-probe.json` — same case, same seat, same day, but a *different run*. Future
+  records carry digests inline, so this is checkable rather than assumed from then on.
+- **Nothing moved at all — including the criterion authored to be arguable.** All four criteria
+  came back **600/600 stable**, the fixed-window "arguable" one ruled MET on every single roll.
+  That is worth more than it looks: it means authoring intuition does **not** predict where this
+  judge's flip point is, so any new fixture needs a cheap calibration probe *before* it is frozen
+  and spent against. It also weakens the assumption that flip rate peaks on arguable criteria — for
+  this judge, on this case, it was flat zero everywhere.
 
 ✅ **Estimator defect, fixed 2026-08-14.** The script used to prescribe its k with the rule of
 three (`3/p` → 587) while reporting the achieved bound with **Wilson**, which at zero events is
@@ -404,6 +413,60 @@ the same rolls (no vendor re-called; they carry a `restated` note and `estimator
 The wrong fix, recorded so nobody re-applies it: dropping Wilson's z to the one-sided **1.6449**
 makes it *anti-conservative* at zero events — 0.449% at k=600, tighter than the exact binomial test
 allows. The estimator was the defect, not the z.
+
+#### The ground-truth guard — why a "borderline" fixture is the wrong next measurement
+
+The obvious next fixture is a **borderline** one: a case where a criterion is genuinely arguable,
+on the theory that the judge wobbles most near the boundary and the cap matters most there. That is
+the wrong artifact, and the reason is worth writing down because it nearly got built.
+
+The cap bounds *P(at least one **undeserved** VERIFIED across N rolls)*. "Undeserved" needs an
+anchor. On a genuinely contested case there **is no attack-relevant statistic at all**: if the code
+arguably meets the criteria a human wrote, a VERIFIED ruling is a correct call, not a compromise.
+Ambiguity in a spec is a criteria-quality problem, and no roll-cap can or should defend against it.
+
+Worse, the script would have reported it anyway. `greens` was counted blind, and both licence
+branches fired on the count alone — so a contested fixture returning greens 40% of the time would
+have headlined a "40% false-green rate" and prescribed cutting `maxJudgeRuns` to 1, a published cap
+change manufactured out of defensible verdicts. The mirror error is quieter and just as wrong: a
+judge that stably *refuses* a contested case would have tripped the "licenses KEEPING 10" line from
+a case that licenses nothing.
+
+So ground truth is now **derived** from the fixture's `expected` labels, and a contested fixture is
+**refused** rather than renamed — a renamed percentage in the same slot gets quoted as the old one
+inside a month; a section that never prints cannot be. On a contested case `pHat`, `pUpper95` and
+`capRisk` are `null` in the JSON (not renamed), the observed rate survives as `pVerified`, and the
+per-criterion variance table still prints in full — that half is label-free and stands on any
+fixture. `test/fixtures/judge-variance-contested-case.js` is the negative control: the same rate
+limiter diff, but criteria that never ask about the unbounded Map, so the real defect is honestly
+out of scope. `--case contested` rolls it; `npm run test:variance` asserts the refusal in both
+directions.
+
+The **attacker-optimal** diff is not contested — it is one that is *actually wrong but maximally
+plausible*. Assume it is p-optimized, since an author can rehearse against `preflight --judge` on
+their own key before ever opening a PR.
+
+#### Which fixture is missing
+
+A **subtle-but-unmet** case: ground truth firmly NOT VERIFIED on careful reading, but with a defect
+that needs two steps to see (an edge-case comparison, a flaw spanning two hunks, a default that
+changes a path). Design notes for whoever builds it:
+
+- **One pivot, decisive controls, no second unmet criterion.** Verdict-level VERIFIED needs *every*
+  criterion to come back met, so the existing fixture's decisively-unmet Map criterion drives
+  measured p to ~0 and **masks** whatever the subtle criterion is doing. That is a real limitation
+  of the 600-roll result, not a hypothetical.
+- **Calibrate ~30 rolls before freezing** (cents). If the judge is 0/30 or 30/30 on the pivot,
+  reshape the diff and re-probe. Fixture-shopping during authoring is legitimate — the attacker
+  searches diff-space for high p, so the measurement should too. The freeze rule starts when
+  full-k measurement starts, not during authoring. Add it as a **new file**; the two existing
+  fixtures never move.
+- **If it comes back high** (say 20%), the decisive-case number stays true but "10 clears a 5%
+  ceiling" stops being defensible in general. The honest response is an amendment, not a
+  retraction, and *not* cutting the cap to 1 — attempts are per-PR and lifetime, so ordinary
+  iterative pushes burn them; a cap of 1 breaks legitimate use. It would mean the cap only
+  functions in the small-p regime and the ceiling for the subtle class is carried by the unanimity
+  jury and human review.
 
 #### How to re-check it
 
