@@ -1,0 +1,427 @@
+{
+  "synthetic": false,
+  "syntheticRate": null,
+  "case": "judge-variance-case",
+  "fingerprint": "97b07e2aec34a2fe1eeaae946e56c1c3aa49eba7b102d7c88043dfba16fe1047",
+  "family": "openai",
+  "model": null,
+  "k": 30,
+  "valid": 30,
+  "errors": 0,
+  "promptTokens": 846,
+  "greens": 0,
+  "pHat": 0,
+  "pUpper95": 0.11351339322119766,
+  "capRisk": {
+    "rolls10": 0,
+    "rolls10Upper95": 0.7002758165088141
+  },
+  "powerNeeded": {
+    "perRoll": 0.005116196891823743,
+    "rollsNeeded": 587
+  },
+  "perCriterion": [
+    {
+      "text": "the limiter rejects the 6th request from one client within 60 seconds",
+      "expected": "arguable",
+      "votes": 30,
+      "met": 30,
+      "unmet": 0,
+      "flips": 0,
+      "flipRate": 0,
+      "flipRateUpper95": 0.11351339322119766
+    },
+    {
+      "text": "the limiter's counters do not grow without bound",
+      "expected": "unmet",
+      "votes": 30,
+      "met": 0,
+      "unmet": 30,
+      "flips": 0,
+      "flipRate": 0,
+      "flipRateUpper95": 0.11351339322119766
+    },
+    {
+      "text": "a rejected request returns HTTP 429",
+      "expected": "met",
+      "votes": 30,
+      "met": 30,
+      "unmet": 0,
+      "flips": 0,
+      "flipRate": 0,
+      "flipRateUpper95": 0.11351339322119766
+    },
+    {
+      "text": "each client is limited independently",
+      "expected": "met",
+      "votes": 30,
+      "met": 30,
+      "unmet": 0,
+      "flips": 0,
+      "flipRate": 0,
+      "flipRateUpper95": 0.11351339322119766
+    }
+  ],
+  "rolls": [
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "64646c7c0bf0"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "d8cdc07fc1b1"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "1fa015d09770"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "28ac8edb4c62"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "21d8c8112914"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "f7a2d31f116b"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "1fa015d09770"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "3c9099ae2f22"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "087cbb6e5724"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "7be6fd34802a"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "fdf1c43a3f7d"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "fdf1c43a3f7d"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "964e32b94cf9"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "e8d9aea2f937"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "62733f3c82c9"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "58daf00087ce"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "7cffabac6ea8"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "ac49143e3907"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "019e9ee7ec67"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "3bf10fab507c"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "336cbf7ba2eb"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "382c53e4093a"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "919633fbf572"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "abfd6589d219"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "d2b69461492a"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "fdf1c43a3f7d"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "ac49143e3907"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "0ee1c68b1c3f"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "c0be938041ca"
+    },
+    {
+      "ok": true,
+      "verdict": "NOT VERIFIED",
+      "cause": "criteria_unmet",
+      "rulings": {
+        "the limiter rejects the 6th request from one client within 60 seconds": true,
+        "the limiter's counters do not grow without bound": false,
+        "a rejected request returns HTTP 429": true,
+        "each client is limited independently": true
+      },
+      "textDigest": "9e43ddf5df8f"
+    }
+  ]
+}

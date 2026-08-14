@@ -366,10 +366,37 @@ Two limits worth knowing, neither hidden:
 - Criteria may live in a **linked issue**, and editing an issue fires no pull-request event at
   all. Nothing re-checks the pin until the next run on that PR.
 
-#### The number 10 is arithmetic, not measurement — how to actually check it
+#### The number 10, measured — 2026-08-14
 
-`maxJudgeRuns: 10` rests on a per-run false-pass rate nobody has observed. `scripts/smoke-judge-variance.js`
-observes it: it re-rolls one **frozen** diff + spec (`test/fixtures/judge-variance-case.js`) through
+**`maxJudgeRuns: 10` is no longer a guess.** The frozen reference case was rolled **600 times**
+through the real OpenAI seat at temperature 0: **600 valid rolls, 0 errors, ZERO false greens.**
+Exact Clopper-Pearson one-sided 95% upper bound on the per-roll false-green rate: **0.498%**. The
+bar for a cap of 10 at a 5% ceiling is 0.5116%, so it clears — and it clears under the **union
+bound** as well (10 × 0.498% = 4.98% < 5%), which needs no independence assumption between rolls.
+Record: `variance-2026-08-openai-solo.json`.
+
+What that does **not** license, and the distinction is the whole point:
+
+- It is **one case, and a decisively-unmet one.** The cap exists for *borderline* cases, where the
+  flip rate is highest and where a resubmitting agent actually operates. This result supports
+  **keeping** 10. It does not support **raising** it. A borderline fixture is the missing measurement.
+- It is the **solo OpenAI seat**. That still bounds the two-vendor jury, because `mergeJuryResults`
+  requires unanimity for a criterion to be met — a jury false green needs the OpenAI seat to have
+  flipped too. It bounds nothing about a **gemini-only** seat.
+- **Temperature 0 did not make the judge deterministic.** A 30-roll probe returned **26 distinct
+  judge texts**. Had the outputs been byte-identical the bound would have been fiction — one
+  computation replayed 600 times, not 600 draws. The JSON record now stores a `textDigest` per roll
+  so this is checkable rather than assumed.
+
+⚠️ **Known defect, not yet fixed:** the script prescribes its k with the rule of three
+(`3/p` → 587) but reports the achieved bound with **Wilson**, which at zero events is ≈ `z²/n`
+(3.84/n). Two different estimators, so the k it tells you to run can never pass the bar it then
+applies — Wilson needs 748. The measurement above is graded with Clopper-Pearson by hand. The fix is
+to report CP and prescribe k by inverting *the same* estimator.
+
+#### How to re-check it
+
+`scripts/smoke-judge-variance.js` re-rolls one **frozen** diff + spec (`test/fixtures/judge-variance-case.js`) through
 the real judge and reports how much the answer moved. Both shipped providers already send
 `temperature: 0`, so it measures production config — temp 0 bounds the sampler, it does not make a
 vendor's kernels deterministic.
@@ -388,7 +415,8 @@ The result to be careful with is the *clean* one. Zero flips in 20 rolls reads l
 is not: zero events at k=20 still allows a per-roll rate near 15%, and at 15% ten rolls find a false
 green more often than not. The report says so on every run rather than leaving you to remember it,
 and names the k a real conclusion needs — **~587 rolls** to defend a cap of 10 at a 5% ceiling,
-roughly a dollar at current prices. Under-powered null results are the failure mode this script is
+roughly a dollar at current prices (587 is the *rule-of-three* k; see the estimator defect above —
+grading with Wilson instead needs 748, and with Clopper-Pearson 585). Under-powered null results are the failure mode this script is
 shaped around, which is why `npm run test:variance` drives the whole report against a *seeded* judge
 at a known flip rate and asserts the arithmetic recovers it. Rehearsals are stamped `synthetic` in
 both the report and the JSON record so one can never be filed as a measurement.

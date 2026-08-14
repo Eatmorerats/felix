@@ -52,6 +52,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 // Same as bin/felix.js: a key dropped in felix's own .env should just work, rather than needing
 // to be exported into the shell before every run.
 //
@@ -288,7 +289,16 @@ async function main() {
       });
       const rulings = {};
       for (const c of tier3.criteria || []) rulings[c.text] = c.met === true;
-      rolls.push({ ok: true, verdict: v.verdict, cause: v.cause, rulings });
+      // The PROSE the judge wrote, digested. Rulings alone cannot tell the two explanations of a
+      // clean sweep apart: a genuinely tiny flip rate, and temperature 0 having collapsed the
+      // effective sample size to ~1. Both print "0 flips in 600". If every roll returns the same
+      // BYTES, the binomial arithmetic below is fiction — it replayed one computation k times and
+      // the confidence bound is unearned. A digest, not the text: 600 assessments would bloat the
+      // record, and all that is needed is a distinct-count.
+      const textDigest = crypto.createHash('sha1').update(
+        [tier3.assessment || '', ...(tier3.criteria || []).map((c) => c.reason || '')].join(' ')
+      ).digest('hex').slice(0, 12);
+      rolls.push({ ok: true, verdict: v.verdict, cause: v.cause, rulings, textDigest });
       // Per-roll lines are the useful trace on a real run; on a 600-roll rehearsal they are noise.
       if (args.k <= 30) {
         process.stdout.write(`  ${TAG}roll ${String(i + 1).padStart(3)}  ${v.verdict === VERDICTS.VERIFIED ? '✅ VERIFIED' : `❌ ${v.verdict}`}\n`);

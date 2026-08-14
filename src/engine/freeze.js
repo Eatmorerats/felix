@@ -23,13 +23,23 @@
  */
 
 const DEFAULT_FREEZE = {
-  // Binomial arithmetic, not measurement: at a 10% per-run false-pass rate, seven independent
-  // rolls win more often than not, so a cap in the tens is the point at which resampling stops
-  // being cheaper than fixing the code. It is NOT calibrated — scripts/smoke-judge-variance.js
-  // (unwritten) is what would replace this guess with a number. If measured variance at
-  // temperature 0 turns out to be near zero, 10 is needlessly tight; if it is 10%+, 10 is
-  // already too generous. Sized so an honest PR never notices: Felix's own busiest PR to date
-  // spent 6.
+  // MEASURED 2026-08-14, and 10 survives. scripts/smoke-judge-variance.js rolled the frozen
+  // reference case (test/fixtures/judge-variance-case.js) 600 times through the real OpenAI seat
+  // at temperature 0: 600 valid rolls, 0 errors, and ZERO false greens. Exact Clopper-Pearson
+  // one-sided 95% upper bound on the per-roll false-green rate = 0.498%. The bar for a cap of 10
+  // is 1-(1-0.05)^(1/10) = 0.5116%, so it clears — and it clears under the union bound too
+  // (10 x 0.498% = 4.98% < 5%), which holds without assuming the rolls are independent.
+  // Record: variance-2026-08-openai-solo.json.
+  //
+  // Two scope limits that keep this from being more than it is:
+  //  - It is ONE case, and a decisively-unmet one. The cap exists for BORDERLINE cases, where the
+  //    flip rate is highest. This licenses KEEPING 10; it does not license RAISING it.
+  //  - Measured on the solo OpenAI seat. That still bounds the two-vendor jury, because
+  //    mergeJuryResults requires unanimity for "met" (merge.js) — a jury false green needs this
+  //    seat to have flipped too. It bounds nothing about a gemini-only seat.
+  // Not deterministic, before anyone assumes temp 0 made it so: a 30-roll probe returned 26
+  // DISTINCT judge texts. The prose moves; the ruling did not.
+  // Sized so an honest PR never notices: Felix's own busiest PR to date spent 6.
   maxJudgeRuns: 10,
 };
 
