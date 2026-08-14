@@ -23,7 +23,9 @@
 const assert = require('assert');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { wilsonUpper, atLeastOne, power, resolveJudgeEnv } = require('./smoke-judge-variance');
+const {
+  clopperPearsonUpper, binomCdfAtMost, rollsForBound, atLeastOne, power, resolveJudgeEnv,
+} = require('./smoke-judge-variance');
 
 let failures = 0;
 const ok = (name, detail = '') => console.log(`  ✓ PASS  ${name}${detail ? ` — ${detail}` : ''}`);
@@ -68,25 +70,64 @@ console.log('[0] the statistics, pinned against known values');
 // Direct, not inferred through the report. A bound of the wrong SHAPE still satisfies every
 // ordering assertion further down while printing a wrong percentage, so the numbers are named.
 const near = (a, b, tol = 5e-4) => Math.abs(a - b) < tol;
-check('Wilson upper at 0/20 is 16.1%, not 0 — the rule-of-three neighbourhood',
-  near(wilsonUpper(0, 20), 0.16116), wilsonUpper(0, 20).toFixed(5));
-check('Wilson upper at 0/200 is 1.9%', near(wilsonUpper(0, 200), 0.01885), wilsonUpper(0, 200).toFixed(5));
-check('Wilson upper at 0/600 is 0.6%', near(wilsonUpper(0, 600), 0.00637), wilsonUpper(0, 600).toFixed(5));
+const cp = clopperPearsonUpper;
+check('CP upper at 0/20 is 13.9%, not 0 — the rule-of-three neighbourhood',
+  near(cp(0, 20), 0.13911), cp(0, 20).toFixed(5));
+check('CP upper at 0/200 is 1.49%', near(cp(0, 200), 0.01487), cp(0, 200).toFixed(5));
+check('CP upper at 0/600 is 0.498% — the number the cap argument rests on',
+  near(cp(0, 600), 0.00498, 5e-5), cp(0, 600).toFixed(5));
 check('it tightens monotonically with k',
-  wilsonUpper(0, 20) > wilsonUpper(0, 50) && wilsonUpper(0, 50) > wilsonUpper(0, 200) && wilsonUpper(0, 200) > wilsonUpper(0, 600));
-check('Wilson upper at 100/600 is 20.0%', near(wilsonUpper(100, 600), 0.19870), wilsonUpper(100, 600).toFixed(5));
-check('and always sits above the point estimate', wilsonUpper(100, 600) > 100 / 600);
+  cp(0, 20) > cp(0, 50) && cp(0, 50) > cp(0, 200) && cp(0, 200) > cp(0, 600));
+check('CP upper at 100/600 is 19.4%', near(cp(100, 600), 0.19374), cp(100, 600).toFixed(5));
+check('and always sits above the point estimate', cp(100, 600) > 100 / 600);
+// The DEFINING property, checked against the binomial directly rather than against a memorised
+// constant: at the returned p, the chance of seeing this few events is exactly alpha. A bound of
+// the wrong shape can match a hand-copied percentage; it cannot satisfy its own defining equation.
+check('the returned bound solves P(X ≤ x; n, p) = 0.05 by definition',
+  near(binomCdfAtMost(100, 600, cp(100, 600)), 0.05, 1e-6),
+  binomCdfAtMost(100, 600, cp(100, 600)).toFixed(6));
+check('and the zero-event closed form agrees with the general solve',
+  near(binomCdfAtMost(0, 600, cp(0, 600)), 0.05, 1e-9));
+// The trap the estimator swap exists to close. Wilson at zero events degenerates to ≈ z²/n =
+// 3.84/n, which is LOOSER than the exact test — and the old script prescribed k from 3/p while
+// grading with that, so its own prescribed k could not pass. Pinned as an inequality so nobody
+// reintroduces a normal approximation and calls it exact.
+check('CP at zero events is TIGHTER than the Wilson value it replaced (0.637% at k=600)',
+  cp(0, 600) < 0.00637, `${(cp(0, 600) * 100).toFixed(3)}% < 0.637%`);
+check('…and LOOSER than the anti-conservative one-sided-z Wilson (0.449%) — the wrong fix',
+  cp(0, 600) > 0.00449, `${(cp(0, 600) * 100).toFixed(3)}% > 0.449%`);
 check('atLeastOne(0.15, 10) = 80.3%', near(atLeastOne(0.15, 10), 0.80313), atLeastOne(0.15, 10).toFixed(5));
 check('atLeastOne(p, 1) is p', near(atLeastOne(0.15, 1), 0.15));
 check('atLeastOne(0, n) is 0', atLeastOne(0, 10) === 0);
 check('atLeastOne rises with rolls', atLeastOne(0.05, 20) > atLeastOne(0.05, 10));
 // The inversion that turns "cap of 10" into "per-roll rate you must be under".
 const p10 = power({ capRolls: 10 });
-check('a cap of 10 needs p below 0.51%', near(p10.perRoll, 0.00512), p10.perRoll.toFixed(5));
+check('a cap of 10 needs p below 0.51% if rolls are independent', near(p10.perRoll, 0.00512), p10.perRoll.toFixed(5));
 check('which round-trips: 10 rolls at that rate is exactly the 5% target',
   near(atLeastOne(p10.perRoll, 10), 0.05));
-check('and demonstrating it takes ~587 rolls', p10.rollsNeeded === 587, `${p10.rollsNeeded}`);
+check('and below 0.500% under the union bound, which assumes nothing', p10.perRollUnion === 0.005);
+check('the union bar is the STRICTER of the two', p10.perRollUnion < p10.perRoll);
+check('demonstrating the union bar takes 598 rolls', p10.rollsNeeded === 598, `${p10.rollsNeeded}`);
+check('the independence bar takes 585', p10.rollsNeededCompound === 585, `${p10.rollsNeededCompound}`);
+check('and the prescribed k is the larger, so a run at it clears BOTH',
+  p10.rollsNeeded >= p10.rollsNeededCompound);
+// THE ASSERTION THAT WOULD HAVE CAUGHT THE ORIGINAL BUG. The old script prescribed k by the rule
+// of three (587) and then graded with Wilson, which at 587 rolls bounds p at 0.654% — above the
+// 0.512% bar it had just quoted. Prescription and grading must invert the SAME estimator, so the
+// prescribed k is checked by RUNNING the estimator, and k-1 must fail.
+check('a clean sweep at the prescribed k actually clears the union bar',
+  cp(0, p10.rollsNeeded) <= p10.perRollUnion,
+  `${(cp(0, p10.rollsNeeded) * 100).toFixed(4)}% ≤ 0.5000%`);
+check('and one roll fewer does NOT — the inversion is tight, not merely safe',
+  cp(0, p10.rollsNeeded - 1) > p10.perRollUnion,
+  `${(cp(0, p10.rollsNeeded - 1) * 100).toFixed(4)}% > 0.5000%`);
+check('same round-trip for the independence bar', cp(0, p10.rollsNeededCompound) <= p10.perRoll
+  && cp(0, p10.rollsNeededCompound - 1) > p10.perRoll);
+check('rollsForBound inverts CP at other rates too, and stays tight',
+  [0.001, 0.01, 0.05, 0.2].every((pMax) => cp(0, rollsForBound(pMax)) <= pMax
+    && cp(0, rollsForBound(pMax) - 1) > pMax));
 check('a SMALLER cap tolerates a HIGHER per-roll rate', power({ capRolls: 3 }).perRoll > p10.perRoll);
+check('and therefore needs fewer rolls', power({ capRolls: 3 }).rollsNeeded < p10.rollsNeeded);
 assert.ok(true);
 
 console.log('\n[0b] which wallet a run spends from');
@@ -113,7 +154,7 @@ check('it still measures the prompt and prices the run', /tokens \(\d+ chars\), 
 check('it warns that k=20 is under-powered BEFORE any money is spent',
   /proves much less than it looks like/.test(planned.out));
 check('and the plan quotes the rate and the k a real conclusion needs',
-  /Note before you do/.test(planned.out) && /below 0\.5%/.test(planned.out) && /~587 rolls/.test(planned.out));
+  /Note before you do/.test(planned.out) && /below 0\.5000%/.test(planned.out) && /~598 rolls/.test(planned.out));
 // CONTROL. Without this the assertion above passes on a script that does nothing at all: this
 // proves the judge WOULD have been constructed on the spend path, and that the default returns first.
 const spendNoKey = run(['--spend', '--k', '1']);
@@ -140,12 +181,30 @@ const cold = run(['--self-test', '0', '--k', '200', '--json']);
 const c = json(cold.out);
 check('zero false greens observed', c.greens === 0 && c.pHat === 0);
 // The whole point. A naive `p̂ ± z·√(p̂(1-p̂)/n)` collapses to 0 ± 0 here and reports certainty it
-// has not earned; the Wilson bound does not. ~3/200 is the rule-of-three sanity check.
+// has not earned; an exact bound does not. ~3/200 is the rule-of-three sanity check.
 check('but the upper bound is NOT zero', c.pUpper95 > 0.005, `≤ ${(c.pUpper95 * 100).toFixed(1)}%`);
-check('and it is in the right neighbourhood of 3/k', c.pUpper95 > 0.01 && c.pUpper95 < 0.05, `${(c.pUpper95 * 100).toFixed(1)}% vs 1.5%`);
+check('and it is in the right neighbourhood of 3/k', c.pUpper95 > 0.01 && c.pUpper95 < 0.05, `${(c.pUpper95 * 100).toFixed(2)}% vs 1.50%`);
 check('the report REFUSES to read zero as safety', /NOT evidence the cap can be loosened/.test(cold.out));
 check('it names the k a real conclusion needs', c.powerNeeded.rollsNeeded > 400, `${c.powerNeeded.rollsNeeded} rolls`);
 check('and the per-roll rate that would defend a cap of 10', c.powerNeeded.perRoll > 0 && c.powerNeeded.perRoll < 0.01);
+check('the report shows BOTH bars and marks this run as failing them',
+  /union bound/.test(cold.out) && /✗ FAILS/.test(cold.out));
+
+console.log('\n[3b] …but a clean sweep at the PRESCRIBED k does license keeping the cap');
+// The defect this estimator swap fixes, end to end. The old script prescribed a k (587 by the rule
+// of three) and then graded it with Wilson, which that k could never satisfy — so a clean sweep at
+// the k the script itself asked for still printed "10 is UNMEASURED". Prescription and grading now
+// invert the same estimator, so the prescribed k passes BY CONSTRUCTION. Asserted at exactly
+// `powerNeeded.rollsNeeded` rather than a hard-coded 598, so the two can never drift apart again.
+const swept = run(['--self-test', '0', '--k', String(c.powerNeeded.rollsNeeded), '--json']);
+const s = json(swept.out);
+check('a full-power clean sweep still observes zero', s.greens === 0 && s.valid === s.k);
+check('and the bound now clears the union bar', s.pUpper95 * 10 <= 0.05,
+  `10 × ${(s.pUpper95 * 100).toFixed(4)}% = ${(s.pUpper95 * 1000).toFixed(3)}% ≤ 5%`);
+check('the report says so — KEEPING the cap is licensed', /licenses KEEPING maxJudgeRuns at 10/.test(swept.out));
+check('and it says KEEPING, never RAISING — the scope limit is in the output',
+  /does NOT/.test(swept.out) && /license RAISING it/.test(swept.out));
+check('it no longer calls a prescribed-k clean sweep unmeasured', !/is UNMEASURED/.test(swept.out));
 
 console.log('\n[4] a vendor that FAILED is not a vendor that voted');
 // Folding errors into the denominator would understate the false-green rate — the one direction

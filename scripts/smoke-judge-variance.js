@@ -35,8 +35,8 @@
  * ── THE SELF-TEST, AND WHY IT IS NOT OPTIONAL ────────────────────────────────────────────────
  *
  * The deliverable of this script is not the rolls, it is the ARITHMETIC over them — and that is
- * the half that can be wrong while looking right. A Wilson bound with a sign error still prints a
- * confident percentage. So `--self-test <rate>` replaces the vendor with a seeded synthetic judge
+ * the half that can be wrong while looking right. A confidence bound with a sign error still prints
+ * a confident percentage. So `--self-test <rate>` replaces the vendor with a seeded synthetic judge
  * that flips at a rate we chose, and the report must recover it. Every line of a self-test report
  * is stamped SYNTHETIC and the JSON record carries `synthetic: true`, so a rehearsal can never be
  * filed as a measurement. `scripts/smoke-judge-variance-selftest.js` drives it and asserts.
@@ -77,7 +77,10 @@ const CASE = require('../test/fixtures/judge-variance-case');
 // Rough, and labelled rough wherever it is printed. Vendor pricing moves; the TOKEN counts above
 // it are measured and do not. Override with FELIX_VARIANCE_USD_PER_MTOK if yours differs.
 const ASSUMED_USD_PER_MTOK = 2.0; // gpt-4.1 input, checked 2026-08
-const Z95 = 1.959963985;
+// Confidence level of every bound printed below: one-sided 95%. Distinct from the 5% CEILING on
+// cap risk that `power()` takes as `target` — they are numerically equal and conceptually
+// unrelated, and conflating them is exactly the kind of quiet error this file is written against.
+const ALPHA = 0.05;
 
 function parseArgs(argv) {
   const a = { k: 20, spend: false, json: false, out: null, selfTest: null };
@@ -150,35 +153,106 @@ function syntheticJudge(rate, criteria, { errorEvery = 0 } = {}) {
 }
 
 /**
- * Wilson score upper bound on a proportion — correct at zero events, where the naive
- * `flips/k ± z·sqrt(p(1-p)/k)` collapses to 0 ± 0 and reports certainty it has not earned.
+ * P(X ≤ x) for X ~ Binomial(n, p). Summed in logs so the n=600 binomial coefficients cannot
+ * overflow on the way to a probability that fits comfortably in a double.
  */
-function wilsonUpper(events, n) {
+function binomCdfAtMost(x, n, p) {
+  if (p <= 0) return 1;
+  if (p >= 1) return x >= n ? 1 : 0;
+  const lp = Math.log(p);
+  const lq = Math.log1p(-p);
+  let logC = 0; // log C(n,0) = 0, then stepped multiplicatively
+  let sum = 0;
+  for (let i = 0; i <= x; i++) {
+    if (i > 0) logC += Math.log((n - i + 1) / i);
+    sum += Math.exp(logC + i * lp + (n - i) * lq);
+  }
+  return Math.min(1, sum);
+}
+
+/**
+ * EXACT (Clopper-Pearson) one-sided upper bound on a proportion: the largest p for which observing
+ * this few events would still not be surprising at level `alpha`. Solves `P(X ≤ x; n, p) = alpha`.
+ *
+ * Why exact rather than Wilson — and this file used to get it wrong, which is the whole reason the
+ * comment is this long. Wilson is a normal APPROXIMATION, and at zero events it degenerates to
+ * ≈ z²/n = 3.84/n, materially looser than the exact binomial test warrants (0.64% at k=600 where
+ * the exact answer is 0.50%). That looseness is not "conservative and therefore harmless": the
+ * script also PRESCRIBES a k, and it prescribed one by the rule of three (3/p) while GRADING with
+ * Wilson (3.84/p). It told you to run 587 rolls to clear a bar that needs 748 — a k that could not
+ * pass the test the same script would then apply. Both halves now invert the SAME estimator, so a
+ * prescribed k passes by construction. See `rollsForBound`.
+ *
+ * Do NOT "fix" the old version by dropping Wilson's z to the one-sided 1.6449. At zero events that
+ * goes ANTI-conservative — 0.449% at k=600, TIGHTER than the exact test allows — which is the one
+ * direction a safety bound must never err in. The estimator was the defect, not the z.
+ */
+function clopperPearsonUpper(events, n, alpha = ALPHA) {
   if (!n) return 1;
-  const p = events / n;
-  const z2 = Z95 * Z95;
-  const denom = 1 + z2 / n;
-  const centre = (p + z2 / (2 * n)) / denom;
-  const half = (Z95 / denom) * Math.sqrt((p * (1 - p)) / n + z2 / (4 * n * n));
-  return Math.min(1, centre + half);
+  if (events >= n) return 1;
+  // At zero events the general solve collapses to a closed form: P(X ≤ 0) = (1-p)^n = alpha.
+  // Kept explicit because it is the case every conclusion in this file actually rests on, and a
+  // bisection that quietly lost a bit of precision there would move a published number.
+  if (events === 0) return 1 - alpha ** (1 / n);
+  // The CDF is monotonically DECREASING in p, so bisect: too much mass at `mid` means p is too low.
+  let lo = events / n;
+  let hi = 1;
+  for (let i = 0; i < 100; i++) {
+    const mid = (lo + hi) / 2;
+    if (binomCdfAtMost(events, n, mid) > alpha) lo = mid; else hi = mid;
+  }
+  return hi;
 }
 
 /** P(at least one green in `rolls` independent draws at rate `p`). */
 const atLeastOne = (p, rolls) => 1 - (1 - p) ** rolls;
 
 /**
+ * Smallest k for which a CLEAN SWEEP (zero events in k) bounds the rate at or below `pMax`.
+ *
+ * This is `clopperPearsonUpper(0, k) ≤ pMax` inverted — the same estimator the report grades with,
+ * which is the entire point. At zero events that is `1 - alpha^(1/k) ≤ pMax`, i.e.
+ * `k ≥ ln(alpha) / ln(1 - pMax)`. Asserted against the general estimator in the self-test rather
+ * than trusted: an inversion that has drifted from its estimator is precisely the old bug.
+ */
+function rollsForBound(pMax, alpha = ALPHA) {
+  if (pMax <= 0) return Infinity;
+  if (pMax >= 1) return 1;
+  return Math.ceil(Math.log(alpha) / Math.log(1 - pMax));
+}
+
+/**
  * How many rolls would it take to actually justify the cap?
  *
  * A cap of N rolls is defensible if the chance of ANY false green across all N stays under
- * `target`. Invert that for the per-roll rate, then invert the rule of three (0 events in k trials
- * bounds p at ~3/k, 95%) for the k that would demonstrate it.
+ * `target`. There are two honest ways to say that, and they need different k:
+ *
+ *   compounding  1-(1-p)^N ≤ target  →  p ≤ 1-(1-target)^(1/N)  = 0.5116% at N=10. ASSUMES the
+ *                rolls are independent draws. Tighter, and the assumption is not free.
+ *   union bound  N·p ≤ target        →  p ≤ target/N            = 0.5000% at N=10. Assumes NOTHING
+ *                about independence, so it survives correlated rolls. Slightly more k.
+ *
+ * `rollsNeeded` is the union-bound k — the larger of the two, so a run at the prescribed k clears
+ * BOTH readings and the weaker assumption is the one being leaned on. Both are returned because a
+ * report that quotes one bar and grades against the other is how this went wrong the first time.
  */
 function power({ capRolls, target = 0.05 }) {
   const perRoll = 1 - (1 - target) ** (1 / capRolls);
-  return { perRoll, rollsNeeded: Math.ceil(3 / perRoll) };
+  const perRollUnion = target / capRolls;
+  return {
+    perRoll,
+    perRollUnion,
+    rollsNeededCompound: rollsForBound(perRoll),
+    rollsNeeded: rollsForBound(perRollUnion),
+  };
 }
 
 const pct = (x) => `${(x * 100).toFixed(1)}%`;
+// The cap argument turns on a comparison between two numbers that BOTH round to "0.5%" — the
+// measured 0.498% bound and the 0.500% bar it has to clear. One decimal there prints a tautology.
+// Four, not three: at three, `10 × 0.4997%` prints as "10 × 0.500% = 4.997%" and the reader is
+// invited to think the arithmetic is wrong.
+const pctFine = (x) => `${(x * 100).toFixed(4)}%`;
 
 /**
  * Pick which wallet this run spends from, and say so when it is the wrong one.
@@ -253,7 +327,8 @@ async function main() {
   if (!args.spend && !synthetic) {
     console.log('  Nothing was called. Re-run with --spend to actually roll.\n');
     console.log(`  Note before you do: to defend a cap of 10 you need the per-roll false-green rate`);
-    console.log(`  below ${pct(need.perRoll)}, and demonstrating that with zero observed flips takes`);
+    console.log(`  below ${pctFine(need.perRollUnion)} (union bound; ${pctFine(need.perRoll)} if you are willing to assume the rolls`);
+    console.log(`  are independent), and demonstrating that with zero observed flips takes`);
     console.log(`  ~${need.rollsNeeded} rolls (~$${((promptTokens * need.rollsNeeded * usdPerMTok) / 1e6).toFixed(2)}). At k=${args.k} a clean sweep proves much less than it looks like.\n`);
     process.exit(0);
   }
@@ -329,7 +404,7 @@ async function main() {
       unmet: votes.length - met,
       flips,
       flipRate: votes.length ? flips / votes.length : 0,
-      flipRateUpper95: wilsonUpper(flips, votes.length),
+      flipRateUpper95: clopperPearsonUpper(flips, votes.length),
     };
   });
 
@@ -338,7 +413,7 @@ async function main() {
   // therefore IS the false green a resampling attack is fishing for — no interpretation needed.
   const greens = valid.filter((r) => r.verdict === VERDICTS.VERIFIED).length;
   const pHat = valid.length ? greens / valid.length : 0;
-  const pUpper = wilsonUpper(greens, valid.length);
+  const pUpper = clopperPearsonUpper(greens, valid.length);
 
   console.log('\n' + '─'.repeat(78));
   console.log(`${TAG}Per-criterion stability   (${valid.length} valid roll(s), ${errors} error(s))`);
@@ -354,7 +429,7 @@ async function main() {
   console.log('─'.repeat(78));
   if (synthetic) console.log(`  REHEARSAL. The seeded judge was set to ${pct(args.selfTest)}; anything below is arithmetic, not evidence.`);
   console.log(`  VERIFIED on ${greens} of ${valid.length} roll(s) of a case a reviewer calls NOT VERIFIED.`);
-  console.log(`  point estimate p = ${pct(pHat)}   ·   95% upper bound p ≤ ${pct(pUpper)}`);
+  console.log(`  point estimate p = ${pct(pHat)}   ·   exact (Clopper-Pearson) one-sided 95% bound p ≤ ${pctFine(pUpper)}`);
   console.log('');
   console.log('  Chance of at least one false green, if an attacker just re-rolls:');
   for (const n of [1, 3, 5, 10, 20]) {
@@ -367,11 +442,22 @@ async function main() {
   console.log('─'.repeat(78));
   if (synthetic) console.log('  NOTHING. This was a rehearsal of the arithmetic. Re-run with --spend for a measurement.');
   if (greens === 0) {
-    console.log(`  ZERO false greens in ${valid.length} rolls is NOT evidence the cap can be loosened.`);
-    console.log(`  Zero events at this k still allows a per-roll rate as high as ${pct(pUpper)}, and at`);
-    console.log(`  that rate ten rolls find a green ${pct(atLeastOne(pUpper, 10))} of the time.`);
-    console.log(`  To defend a cap of 10 you need p below ${pct(need.perRoll)} — that takes ~${need.rollsNeeded} rolls.`);
-    console.log(`  Until then the honest position is: 10 is UNMEASURED, and leaving it is the safe error.`);
+    // Both bars, and the run must clear the WEAKER-ASSUMPTION one to count. The union bound
+    // (10·p ≤ 5%) assumes nothing about independence between rolls; the compounding form does.
+    const clearsUnion = pUpper * 10 <= 0.05;
+    const clearsCompound = atLeastOne(pUpper, 10) <= 0.05;
+    console.log(`  Zero events at k=${valid.length} still allows a per-roll rate as high as ${pctFine(pUpper)}.`);
+    console.log(`  Against a 5% ceiling across a cap of 10:`);
+    console.log(`    union bound   10 × ${pctFine(pUpper)} = ${pctFine(pUpper * 10)}  ${clearsUnion ? '✓ CLEARS' : '✗ FAILS'} the 5% ceiling  (assumes nothing)`);
+    console.log(`    compounding   1-(1-p)^10 = ${pctFine(atLeastOne(pUpper, 10))}  ${clearsCompound ? '✓ CLEARS' : '✗ FAILS'} the 5% ceiling  (assumes independence)`);
+    if (clearsUnion && clearsCompound) {
+      console.log(`  So this run licenses KEEPING maxJudgeRuns at 10. Read that narrowly: it does NOT`);
+      console.log(`  license RAISING it, and it is one case against one seat on one day.`);
+    } else {
+      console.log(`  ZERO false greens in ${valid.length} rolls is NOT evidence the cap can be loosened.`);
+      console.log(`  To defend a cap of 10 you need p below ${pctFine(need.perRollUnion)} — that takes ~${need.rollsNeeded} rolls.`);
+      console.log(`  Until then the honest position is: 10 is UNMEASURED, and leaving it is the safe error.`);
+    }
   } else if (atLeastOne(pHat, 10) > 0.5) {
     console.log(`  10 is ALREADY TOO GENEROUS. At the observed ${pct(pHat)}, ten rolls win ${pct(atLeastOne(pHat, 10))}`);
     console.log('  of the time — the cap is not a bound on the attack, it is a budget for it.');
@@ -420,7 +506,7 @@ async function main() {
 // smoke-judge-variance-selftest.js rather than inferred through the report's prose. Inferring them
 // is how a bound that is merely the wrong shape survives: every ordering assertion still holds
 // while the printed percentage is wrong.
-module.exports = { wilsonUpper, atLeastOne, power, resolveJudgeEnv };
+module.exports = { clopperPearsonUpper, binomCdfAtMost, rollsForBound, atLeastOne, power, resolveJudgeEnv };
 
 if (require.main === module) {
   main().catch((e) => {

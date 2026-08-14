@@ -388,11 +388,22 @@ What that does **not** license, and the distinction is the whole point:
   computation replayed 600 times, not 600 draws. The JSON record now stores a `textDigest` per roll
   so this is checkable rather than assumed.
 
-⚠️ **Known defect, not yet fixed:** the script prescribes its k with the rule of three
-(`3/p` → 587) but reports the achieved bound with **Wilson**, which at zero events is ≈ `z²/n`
-(3.84/n). Two different estimators, so the k it tells you to run can never pass the bar it then
-applies — Wilson needs 748. The measurement above is graded with Clopper-Pearson by hand. The fix is
-to report CP and prescribe k by inverting *the same* estimator.
+✅ **Estimator defect, fixed 2026-08-14.** The script used to prescribe its k with the rule of
+three (`3/p` → 587) while reporting the achieved bound with **Wilson**, which at zero events is
+≈ `z²/n` (3.84/n) — two different estimators, so the k it told you to run could never pass the bar
+it then applied (Wilson needs 748). That is why a clean sweep at k=600 still printed "10 is
+UNMEASURED" while the hand-graded Clopper-Pearson bound said it cleared.
+
+Both halves now invert the **same exact (Clopper-Pearson) one-sided 95%** estimator, so a
+prescribed k passes by construction: **598 rolls** under the union bound, 585 if you assume the
+rolls are independent. The script prescribes the larger, so a run at it clears both readings. The
+self-test pins this by *running* the estimator at the prescribed k — and asserting that one roll
+fewer fails — rather than by remembering a constant. The two committed records were restated from
+the same rolls (no vendor re-called; they carry a `restated` note and `estimator` field).
+
+The wrong fix, recorded so nobody re-applies it: dropping Wilson's z to the one-sided **1.6449**
+makes it *anti-conservative* at zero events — 0.449% at k=600, tighter than the exact binomial test
+allows. The estimator was the defect, not the z.
 
 #### How to re-check it
 
@@ -412,11 +423,12 @@ the measured prompt size, the call count and a cost estimate, and exits having c
 not part of `npm test`.
 
 The result to be careful with is the *clean* one. Zero flips in 20 rolls reads like determinism and
-is not: zero events at k=20 still allows a per-roll rate near 15%, and at 15% ten rolls find a false
+is not: zero events at k=20 still allows a per-roll rate near 14%, and at 14% ten rolls find a false
 green more often than not. The report says so on every run rather than leaving you to remember it,
-and names the k a real conclusion needs — **~587 rolls** to defend a cap of 10 at a 5% ceiling,
-roughly a dollar at current prices (587 is the *rule-of-three* k; see the estimator defect above —
-grading with Wilson instead needs 748, and with Clopper-Pearson 585). Under-powered null results are the failure mode this script is
+and names the k a real conclusion needs — **~598 rolls** to defend a cap of 10 at a 5% ceiling,
+roughly a dollar at current prices. On a clean sweep it now prints both bars side by side (union
+and compounding) with a ✓/✗ against each, so "did this actually clear?" is read off the report
+rather than worked out by hand. Under-powered null results are the failure mode this script is
 shaped around, which is why `npm run test:variance` drives the whole report against a *seeded* judge
 at a known flip rate and asserts the arithmetic recovers it. Rehearsals are stamped `synthetic` in
 both the report and the JSON record so one can never be filed as a measurement.

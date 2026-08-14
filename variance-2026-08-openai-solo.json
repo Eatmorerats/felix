@@ -11,14 +11,17 @@
   "promptTokens": 846,
   "greens": 0,
   "pHat": 0,
-  "pUpper95": 0.006361701016667524,
+  "pUpper95": 0.004980443380361299,
   "capRisk": {
     "rolls10": 0,
-    "rolls10Upper95": 0.06182635893433264
+    "rolls10Upper95": 0.04870291331009702,
+    "rolls10UnionUpper95": 0.04980443380361299
   },
   "powerNeeded": {
     "perRoll": 0.005116196891823743,
-    "rollsNeeded": 587
+    "perRollUnion": 0.005,
+    "rollsNeededCompound": 585,
+    "rollsNeeded": 598
   },
   "perCriterion": [
     {
@@ -29,7 +32,7 @@
       "unmet": 0,
       "flips": 0,
       "flipRate": 0,
-      "flipRateUpper95": 0.006361701016667524
+      "flipRateUpper95": 0.004980443380361299
     },
     {
       "text": "the limiter's counters do not grow without bound",
@@ -39,7 +42,7 @@
       "unmet": 600,
       "flips": 0,
       "flipRate": 0,
-      "flipRateUpper95": 0.006361701016667524
+      "flipRateUpper95": 0.004980443380361299
     },
     {
       "text": "a rejected request returns HTTP 429",
@@ -49,7 +52,7 @@
       "unmet": 0,
       "flips": 0,
       "flipRate": 0,
-      "flipRateUpper95": 0.006361701016667524
+      "flipRateUpper95": 0.004980443380361299
     },
     {
       "text": "each client is limited independently",
@@ -59,7 +62,7 @@
       "unmet": 0,
       "flips": 0,
       "flipRate": 0,
-      "flipRateUpper95": 0.006361701016667524
+      "flipRateUpper95": 0.004980443380361299
     }
   ],
   "rolls": [
@@ -6663,5 +6666,7 @@
         "each client is limited independently": true
       }
     }
-  ]
+  ],
+  "estimator": "clopper-pearson-exact-one-sided-95",
+  "restated": "2026-08-14 — derived statistics ONLY were recomputed from the SAME rolls after the Wilson->Clopper-Pearson estimator fix. No vendor was called and no roll changed; verified by reproducing greens and valid from rolls[] before rewriting."
 }
