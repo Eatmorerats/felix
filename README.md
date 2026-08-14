@@ -471,13 +471,22 @@ the cap to 1.
 
 Records: `calib-subtle-path.json`, `calib-subtle-cache.json` (both stamped `candidate: true`).
 
-⚠️ **Defect found while running these: the recorder mislabels the seat.** `family` and the report's
-scope line are read from `FELIX_JUDGE_FAMILY`, not from the seats `createJudge` actually built. With
-`FELIX_JUDGE_FAMILY=openai,gemini` and no `GEMINI_API_KEY`, judge.js skips the gemini seat and logs
-it — but the report still printed "measured against a 2-vendor JURY (openai,gemini)" for a run that
-was solo OpenAI. `calib-subtle-path.json` was corrected by hand (`seatNote`). **Fix this before any
-run intended to be cited** — a scope note that overstates the grader is worse than none, and this
-one overstates it in the direction that makes a bound look stronger.
+✅ **Defect found while running these, fixed 2026-08-14: the recorder mislabelled the seat.**
+`family` and the report's scope line were read from `FELIX_JUDGE_FAMILY`, not from the seats
+`createJudge` actually built. With `FELIX_JUDGE_FAMILY=openai,gemini` and no `GEMINI_API_KEY`,
+judge.js skips the gemini seat and logs it — but the report still printed "measured against a
+2-vendor JURY (openai,gemini)" for a run that was solo OpenAI. A scope note that overstates the
+grader is worse than none, and this one overstated it in the direction that makes a bound look
+stronger.
+
+`createJudge` now carries the bench it built (`judge.seats` — `requested`, `active`, `skipped`,
+frozen and non-writable), and the script reads the grader from there for the "graded by" line, the
+scope line, and the record's `family`/`model`. A skipped seat is now called out in the report, not
+just in a log line. The same fix corrected a quieter bug beside it: pacing used the **first
+requested** family's ceiling, so a solo OpenAI run paced itself against Gemini's the moment Gemini
+was declared and unkeyed. `calib-subtle-path.json` was corrected by hand (`seatNote`);
+`calib-subtle-cache.json` was run with `FELIX_JUDGE_FAMILY=openai`, so its label was already true.
+Records written from here on carry `seats` inline, so the mismatch is visible rather than assumed.
 
 #### Which fixture is missing
 
