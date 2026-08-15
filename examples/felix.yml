@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: Eatmorerats/felix@main
+      - uses: Eatmorerats/felix@v1   # pin a tag — @main changes under you
         with:
           # Cross-family judge — keep the default OpenAI, or switch to Gemini (a
           # different vendor = a stronger second opinion, and cheaper per PR) by

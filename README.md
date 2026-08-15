@@ -6,6 +6,32 @@ It runs **parallel to CodeRabbit** — CodeRabbit reasons over the diff text;
 Felix executes the code and asks *"does the running result satisfy what a human
 asked for?"*
 
+## Read this before you wire Felix into your repo
+
+**Felix is a second reviewer, not a gate.** Everything below is measured, not modelled, and the
+honest version is more useful to you than a pitch.
+
+- ⚠️ **The judge misses subtle defects about 1 time in 7.** On a frozen fixture whose defect spans
+  two hunks — each hunk individually correct, the bug living in the relationship between them —
+  598 rolls through a solo OpenAI seat at temperature 0 returned **85 false greens: 14.2%, exact
+  95% bound ≤ 16.78%.** A `VERIFIED` from Felix is real evidence; it is **not** permission to skip
+  a human read. [Full result and what it does to the safety cap.](#the-subtle-class-measured--2026-08-14-the-cap-was-never-the-control-here)
+- ✅ **What it is genuinely good at:** running your code. Tier 1 — install, build, test, secrets
+  scan — is deterministic and does not involve a model at all. On a decisively-unmet criterion the
+  judge was **0 false greens in 600 rolls** (≤ 0.498%). It is the obvious defects and the "did this
+  actually build and pass" question where Felix earns its place.
+- 📋 **It is only as good as your acceptance criteria.** Felix grades a human-written checklist in
+  the PR description. Vague criteria produce meaningless verdicts, and a PR with none gets
+  `INSUFFICIENT EVIDENCE` — by design, `no_spec` is terminal and cannot be retried into a pass.
+  Writing falsifiable criteria *before* the code is most of the value here; the verifier is the
+  cheap part.
+- 💵 **You pay for the judge.** Your own `OPENAI_API_KEY` (or `GEMINI_API_KEY`), billed to you, on
+  every non-draft PR. Small diffs are cents; large ones chunk and cost more.
+- 🔧 **Auto-detection covers node/ts, python, go, rust.** Anything else needs a
+  `felix.config.json`. Felix **refuses** rather than guessing a test runner — a runner that finds
+  no tests exits 0 and reports a FALSE PASS. The refusal is correct behaviour, not a broken tool.
+- 📌 **Pin a tag, not `@main`.** `@main` means your CI changes whenever this repo does.
+
 ## Verdicts
 
 | Verdict | Meaning |
@@ -222,7 +248,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: Eatmorerats/felix@main    # the Felix action
+      - uses: Eatmorerats/felix@v1      # pin a tag — @main changes under you
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
 ```

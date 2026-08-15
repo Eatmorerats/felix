@@ -59,7 +59,7 @@ jobs:
     steps:
       # Pin this to a commit SHA rather than @main for anything you actually gate on: @main means
       # whatever that branch says today.
-      - uses: Eatmorerats/felix@main
+      - uses: Eatmorerats/felix@v1   # pin a tag — @main changes under you
         with:
           mode: spec-sentinel
           # The verdict store IS the pin. Without these the sentinel has nothing to compare
