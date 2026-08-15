@@ -6,6 +6,32 @@ It runs **parallel to CodeRabbit** — CodeRabbit reasons over the diff text;
 Felix executes the code and asks *"does the running result satisfy what a human
 asked for?"*
 
+## Read this before you wire Felix into your repo
+
+**Felix is a second reviewer, not a gate.** Everything below is measured, not modelled, and the
+honest version is more useful to you than a pitch.
+
+- ⚠️ **The judge misses subtle defects about 1 time in 7.** On a frozen fixture whose defect spans
+  two hunks — each hunk individually correct, the bug living in the relationship between them —
+  598 rolls through a solo OpenAI seat at temperature 0 returned **85 false greens: 14.2%, exact
+  95% bound ≤ 16.78%.** A `VERIFIED` from Felix is real evidence; it is **not** permission to skip
+  a human read. [Full result and what it does to the safety cap.](#the-subtle-class-measured--2026-08-14-the-cap-was-never-the-control-here)
+- ✅ **What it is genuinely good at:** running your code. Tier 1 — install, build, test, secrets
+  scan — is deterministic and does not involve a model at all. On a decisively-unmet criterion the
+  judge was **0 false greens in 600 rolls** (≤ 0.498%). It is the obvious defects and the "did this
+  actually build and pass" question where Felix earns its place.
+- 📋 **It is only as good as your acceptance criteria.** Felix grades a human-written checklist in
+  the PR description. Vague criteria produce meaningless verdicts, and a PR with none gets
+  `INSUFFICIENT EVIDENCE` — by design, `no_spec` is terminal and cannot be retried into a pass.
+  Writing falsifiable criteria *before* the code is most of the value here; the verifier is the
+  cheap part.
+- 💵 **You pay for the judge.** Your own `OPENAI_API_KEY` (or `GEMINI_API_KEY`), billed to you, on
+  every non-draft PR. Small diffs are cents; large ones chunk and cost more.
+- 🔧 **Auto-detection covers node/ts, python, go, rust.** Anything else needs a
+  `felix.config.json`. Felix **refuses** rather than guessing a test runner — a runner that finds
+  no tests exits 0 and reports a FALSE PASS. The refusal is correct behaviour, not a broken tool.
+- 📌 **Pin a tag, not `@main`.** `@main` means your CI changes whenever this repo does.
+
 ## Verdicts
 
 | Verdict | Meaning |
@@ -89,6 +115,104 @@ node bin/felix.js owner/repo#42 --post --repo-path /path/to/clone
 
 Exit codes: `0` VERIFIED/SKIPPED · `1` NOT VERIFIED · `2` INSUFFICIENT EVIDENCE · `3` error.
 
+## Pre-flight: run Felix before the PR exists
+
+`felix preflight` verifies your **working tree** — uncommitted and untracked changes included —
+against a local criteria file. It is meant for the loop an agent runs *before* opening a PR, so
+that CI's single independent verdict is spent once, on finished work.
+
+```bash
+# write the acceptance criteria you intend to put in the PR description
+mkdir -p .felix && $EDITOR .felix/preflight-criteria.md
+
+# Tier 1 only — free, no API calls. This is the loop you want 90% of the time.
+node bin/felix.js preflight
+
+# also grade the criteria with the cross-family judge (costs money)
+node bin/felix.js preflight --judge
+
+# machine-readable, for a loop driver
+node bin/felix.js preflight --json
+```
+
+Exit codes match the PR path (`0` clean · `1` NOT VERIFIED · `2` INSUFFICIENT · `3` error), plus
+`4` for a refused loop attempt. Whether a failure is worth **retrying** is a separate field,
+`retryable`, in `--json`.
+
+### The loop
+
+`--loop` makes the run one counted attempt in a bounded session. The *fix* step is the agent's own
+work, not Felix's — Felix does not shell out to a model — so the protocol the agent follows lives
+in [`skills/felix-preflight-loop/SKILL.md`](skills/felix-preflight-loop/SKILL.md), and what has to
+be machine-checked lives here.
+
+```bash
+node bin/felix.js preflight --loop --json          # attempt N of 5
+node bin/felix.js preflight --loop --max-attempts 8
+node bin/felix.js preflight --loop --reset-loop    # new budget, new criteria pin
+```
+
+Two things are enforced in code rather than asked for in prose, because a protocol document is
+followed by exactly the entity it is supposed to bound:
+
+- **A ceiling.** Five attempts per session by default, charged on entry, keyed on the repo path.
+  Past it Felix refuses: nothing is installed, run or judged, `verdict` is `null` and the exit code
+  is `4`. It bounds thrash, and it bounds rolling an unconverged diff against a non-deterministic
+  judge until a green comes up. Durable state also survives an agent whose context was compacted
+  mid-loop and no longer remembers it is on attempt four.
+- **A criteria pin.** Attempt 1 records the criteria fingerprint; any later attempt that moves it
+  halts the loop with `spec_changed` — including deleting the file, which would otherwise report as
+  `no_spec` and tell the wrong story. Editing away a criterion the code fails is a cheaper route to
+  green than fixing the code, and a loop that can rewrite its own rubric makes the verifier
+  decorative. Relief is `--reset-loop`, which is a deliberate act a human can see.
+
+Both are **tripwires, not walls**, and both say so in their own refusal text: `--loop` is a flag the
+caller can omit and the state is a file the caller can delete. The achievable goal is that skipping
+them is an *act* that appears in the agent's transcript. A plain `felix preflight` during a live
+session runs uncounted and prints one line saying it did.
+
+### What it will and will not do
+
+**It publishes nothing.** No `felix_verdicts` row, no PR comment, no check run. It does not need
+`GITHUB_TOKEN` or any `SUPABASE_*` variable, and `scripts/probe-preflight-containment.js` asserts
+all of that — including a control leg proving the CI path *does* load what pre-flight does not.
+This is not politeness. The freeze baseline is the earliest `spec_fingerprint` logged for a PR, so
+a single local row would let an agent pin its own rubric; and `judge_attempted` rows are what the
+ten-attempt cap counts, so a local loop could drain CI's budget from outside.
+
+**Only two causes are retryable by a loop:** `criteria_unmet` and `install_failed` — the two states
+where the fix is in the code. Everything else is terminal, and two of them are the hard line:
+
+> `no_spec` and `spec_too_large` stay terminal for any agent. The moment a loop can author or trim
+> the rubric, the verifier grades a spec written by the thing being graded, and it is decorative.
+
+**There is deliberately no CI auto-repair.** `required_to_pass` and the judge's reasons are derived
+from head content, so piping them to an agent that holds push credentials is a prompt-injection
+channel. Locally the same text is not a channel — the agent already owns the tree it is reading
+back — which is the whole reason the loop belongs here and not there.
+
+### Spend, honestly
+
+The judge is **off** unless you pass `--judge`. Beyond that:
+
+- pre-flight refuses to re-grade a tree that is byte-identical to the last one it graded (the
+  snapshot SHA is deterministic in tree + HEAD), because a re-roll buys judge variance, not
+  information;
+- a per-day counter (`FELIX_PREFLIGHT_JUDGE_CAP`, default 20) lives outside your repo in the
+  system temp directory;
+- set **`OPENAI_API_KEY_PREFLIGHT`** to a key with a hard spend limit at the vendor. Pre-flight
+  prefers it over `OPENAI_API_KEY` and warns when it has to fall back.
+
+Only that last one is a real limit. The counter is a file, and the process invoking the CLI can
+delete it — its value is that doing so is a visible act rather than silent overspend.
+
+### Criteria provenance
+
+Pre-flight prints the fingerprint of the criteria it graded. CI pins the fingerprint of whatever
+the **PR description** says. Same text, same hash — so if the two differ, the criteria moved
+between your last local green and the PR you opened. Nothing enforces this locally; it is there so
+a human can see it, in the same place CI shows its own hash.
+
 ### Calibration
 
 Record real post-merge outcomes and see how Felix is doing over time:
@@ -124,7 +248,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: Eatmorerats/felix@main    # the Felix action
+      - uses: Eatmorerats/felix@v1      # pin a tag — @main changes under you
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
 ```
@@ -135,10 +259,15 @@ automatically (node/python/go/rust) or reads a `felix.config.json` at your root.
 A ready-to-copy template lives at [`examples/felix.yml`](./examples/felix.yml).
 Pin to a tag/SHA instead of `@main` for stability.
 
-**Action inputs:** `judge-family` (`openai` default / `gemini`), `openai-api-key`
-**or** `gemini-api-key` (set the one matching `judge-family`), `github-token`,
-`judge-model`, `supabase-url`, `supabase-service-role-key`, `repo-path`, `post`,
+**Action inputs:** `mode` (`verify` default / `spec-sentinel`), `judge-family` (`openai` default
+/ `gemini`), `openai-api-key` **or** `gemini-api-key` (set the one matching `judge-family`),
+`github-token`, `judge-model`, `supabase-url`, `supabase-service-role-key`, `repo-path`, `post`,
 `node-version` — see [`action.yml`](./action.yml).
+
+If you turn gating on, add the second workflow too —
+[`examples/felix-spec-sentinel.yml`](./examples/felix-spec-sentinel.yml) re-checks the
+acceptance-criteria pin when the PR description is edited, without re-running the pipeline. See
+[the criteria freeze](#the-criteria-freeze-and-the-judge-attempt-cap).
 
 To run Felix on this repo's own PRs, add a `.github/workflows/felix.yml` — see [`examples/felix.yml`](examples/felix.yml).
 
@@ -224,6 +353,309 @@ values in either array are a **hard config error** — previously a typo like
 not dead code, reached whenever the judge yields no result and none of the named reasons
 applies. It blocks, so a state nobody anticipated costs a red check and a bug report rather
 than a quiet green.
+
+### The criteria freeze and the judge attempt cap
+
+Felix grades criteria the **author** writes, in the PR description, using a judge that is **not
+deterministic**. A green check therefore says "*this* set was met, *once*" — and both of those
+words need pinning. Two `NOT VERIFIED` causes do it, and neither can be added to
+`insufficientExempt`: nobody should be able to configure "a PR that rewrites its own rubric
+passes my gate".
+
+| cause | what it catches | relief |
+| --- | --- | --- |
+| `spec_changed` | the acceptance criteria moved after Felix graded them | put the criteria back — the hash matches again and grading resumes, no push and no human. Or the maintainer `overrideLabel`. |
+| `attempts_exhausted` | the PR has used all `judge.maxJudgeRuns` (default 10) lifetime judge calls | maintainer `overrideLabel`, or split the remaining work into a new PR with its own budget |
+
+The pin is a SHA-256 of the deduped, normalised, **sorted** criteria texts, so reordering bullets
+is free and any add, delete or reword trips it. No algorithm can tell a typo fix from a
+weakening, so both trip it and both route through the relief valve above — that is the intended
+trade, not a gap. The baseline is the **earliest** fingerprint recorded for the PR, so a drifted
+spec cannot re-pin itself just by being logged. The attempt count is **lifetime per PR**, read
+from the verdict log before the spend, so pushing again does not buy a fresh roll of the dice.
+
+**Both require the verdict log** (`SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`) — they are not
+features computed from the log, they *are* the log. So when the store does not answer:
+
+- **advisory** (the default): Felix warns, says "❓ not enforced" on the comment, and proceeds.
+  Nothing it reports can block a merge, so an unproven control changes no outcome.
+- **`gating.enabled: true`**: Felix **refuses** — it publishes a `failure` check run and exits
+  non-zero rather than a verdict that silently rests on two checks that did not run. **This is a
+  behaviour change: a gated repo with no verdict store will refuse every non-fork PR that has real
+  criteria.** Set the two secrets, or apply the `overrideLabel`.
+
+Two limits worth knowing, neither hidden:
+
+- `gating.enabled` is a **proxy** for "the Felix checks are marked Required in branch protection",
+  and the two can disagree. If you mark the checks Required but leave `gating.enabled` false, you
+  forfeit the store-outage refusal above.
+- Criteria may live in a **linked issue**, and editing an issue fires no pull-request event at
+  all. Nothing re-checks the pin until the next run on that PR.
+
+#### The number 10, measured — 2026-08-14
+
+> ⚠️ **AMENDED the same day — read "The subtle class, measured" below before quoting anything in
+> this section.** Everything here remains true *of the decisive case*. A second frozen fixture,
+> rolled at full power, put the false-green rate at **14.2%** on a subtle defect — which means the
+> cap was never the control for that class, at 10 or at any other number. This section is the
+> narrow result; that one is the scope.
+
+**`maxJudgeRuns: 10` is no longer a guess.** The frozen reference case was rolled **600 times**
+through the real OpenAI seat at temperature 0: **600 valid rolls, 0 errors, ZERO false greens.**
+Exact Clopper-Pearson one-sided 95% upper bound on the per-roll false-green rate: **0.498%**. The
+bar for a cap of 10 at a 5% ceiling is 0.5116%, so it clears — and it clears under the **union
+bound** as well (10 × 0.498% = 4.98% < 5%), which needs no independence assumption between rolls.
+Record: `variance-2026-08-openai-solo.json`.
+
+What that does **not** license, and the distinction is the whole point:
+
+- It is **one case, and a decisively-unmet one.** This result supports **keeping** 10. It does not
+  support **raising** it. The missing measurement is a **subtle-but-unmet** case — see
+  "Which fixture is missing" below, which is *not* the borderline one you might expect.
+- It is the **solo OpenAI seat**. That still bounds the two-vendor jury, because `mergeJuryResults`
+  requires unanimity for a criterion to be met — a jury false green needs the OpenAI seat to have
+  flipped too. It bounds nothing about a **gemini-only** seat.
+- **Temperature 0 did not make the judge deterministic.** A separate 30-roll probe returned **26
+  distinct judge texts**. Had the outputs been byte-identical the bound would have been fiction —
+  one computation replayed 600 times, not 600 draws. ⚠️ Be precise about what is evidence for what:
+  the `textDigest` field **postdates the 600-roll run**, so all 600 digests in
+  `variance-2026-08-openai-solo.json` are `null`. The diversity evidence comes from
+  `variance-diversity-probe.json` — same case, same seat, same day, but a *different run*. Future
+  records carry digests inline, so this is checkable rather than assumed from then on.
+- **Nothing moved at all — including the criterion authored to be arguable.** All four criteria
+  came back **600/600 stable**, the fixed-window "arguable" one ruled MET on every single roll.
+  That is worth more than it looks: it means authoring intuition does **not** predict where this
+  judge's flip point is, so any new fixture needs a cheap calibration probe *before* it is frozen
+  and spent against. It also weakens the assumption that flip rate peaks on arguable criteria — for
+  this judge, on this case, it was flat zero everywhere.
+
+✅ **Estimator defect, fixed 2026-08-14.** The script used to prescribe its k with the rule of
+three (`3/p` → 587) while reporting the achieved bound with **Wilson**, which at zero events is
+≈ `z²/n` (3.84/n) — two different estimators, so the k it told you to run could never pass the bar
+it then applied (Wilson needs 748). That is why a clean sweep at k=600 still printed "10 is
+UNMEASURED" while the hand-graded Clopper-Pearson bound said it cleared.
+
+Both halves now invert the **same exact (Clopper-Pearson) one-sided 95%** estimator, so a
+prescribed k passes by construction: **598 rolls** under the union bound, 585 if you assume the
+rolls are independent. The script prescribes the larger, so a run at it clears both readings. The
+self-test pins this by *running* the estimator at the prescribed k — and asserting that one roll
+fewer fails — rather than by remembering a constant. The two committed records were restated from
+the same rolls (no vendor re-called; they carry a `restated` note and `estimator` field).
+
+The wrong fix, recorded so nobody re-applies it: dropping Wilson's z to the one-sided **1.6449**
+makes it *anti-conservative* at zero events — 0.449% at k=600, tighter than the exact binomial test
+allows. The estimator was the defect, not the z.
+
+#### The ground-truth guard — why a "borderline" fixture is the wrong next measurement
+
+The obvious next fixture is a **borderline** one: a case where a criterion is genuinely arguable,
+on the theory that the judge wobbles most near the boundary and the cap matters most there. That is
+the wrong artifact, and the reason is worth writing down because it nearly got built.
+
+The cap bounds *P(at least one **undeserved** VERIFIED across N rolls)*. "Undeserved" needs an
+anchor. On a genuinely contested case there **is no attack-relevant statistic at all**: if the code
+arguably meets the criteria a human wrote, a VERIFIED ruling is a correct call, not a compromise.
+Ambiguity in a spec is a criteria-quality problem, and no roll-cap can or should defend against it.
+
+Worse, the script would have reported it anyway. `greens` was counted blind, and both licence
+branches fired on the count alone — so a contested fixture returning greens 40% of the time would
+have headlined a "40% false-green rate" and prescribed cutting `maxJudgeRuns` to 1, a published cap
+change manufactured out of defensible verdicts. The mirror error is quieter and just as wrong: a
+judge that stably *refuses* a contested case would have tripped the "licenses KEEPING 10" line from
+a case that licenses nothing.
+
+So ground truth is now **derived** from the fixture's `expected` labels, and a contested fixture is
+**refused** rather than renamed — a renamed percentage in the same slot gets quoted as the old one
+inside a month; a section that never prints cannot be. On a contested case `pHat`, `pUpper95` and
+`capRisk` are `null` in the JSON (not renamed), the observed rate survives as `pVerified`, and the
+per-criterion variance table still prints in full — that half is label-free and stands on any
+fixture. `test/fixtures/judge-variance-contested-case.js` is the negative control: the same rate
+limiter diff, but criteria that never ask about the unbounded Map, so the real defect is honestly
+out of scope. `--case contested` rolls it; `npm run test:variance` asserts the refusal in both
+directions.
+
+The **attacker-optimal** diff is not contested — it is one that is *actually wrong but maximally
+plausible*. Assume it is p-optimized, since an author can rehearse against `preflight --judge` on
+their own key before ever opening a PR.
+
+#### Calibration, 2026-08-14 — the subtle class is NOT the decisive class
+
+Two subtle-but-unmet candidates were authored and probed at k=30 on the solo OpenAI seat. They do
+not agree, and the disagreement is the point:
+
+| candidate | pivot defect | greens | rate |
+|---|---|---|---|
+| `subtle-path` | `startsWith` prefix check missing a separator — one line | **0/30** | 0% (p ≤ 9.5%) |
+| `subtle-cache` | a second code path in the SAME diff writes `email` without invalidating — two hunks | **5/30** | **16.7%** (p ≤ 31.9%) |
+
+**The judge is weak to defects that live in the relationship between hunks, not to single-line edge
+cases.** It caught the path-traversal prefix bug every single time; it ruled the cache criterion MET
+on one roll in six, and those are unambiguous false greens — the criterion says "whenever" and the
+diff contains a path that changes the email without invalidating.
+
+Both numbers are k=30 on **unfrozen candidates**, which is calibration, not measurement — they say
+which fixture is worth spending a full run on, nothing more. `subtle-cache` was then frozen and
+run at full power; see the next section for the number that can actually be quoted.
+
+Records: `calib-subtle-path.json`, `calib-subtle-cache.json` (both stamped `candidate: true`).
+`subtle-path` is **still a candidate** — 0/30 says only "≤ 9.5%", which is not a result, and it has
+never been spent against.
+
+✅ **Defect found while running these, fixed 2026-08-14: the recorder mislabelled the seat.**
+`family` and the report's scope line were read from `FELIX_JUDGE_FAMILY`, not from the seats
+`createJudge` actually built. With `FELIX_JUDGE_FAMILY=openai,gemini` and no `GEMINI_API_KEY`,
+judge.js skips the gemini seat and logs it — but the report still printed "measured against a
+2-vendor JURY (openai,gemini)" for a run that was solo OpenAI. A scope note that overstates the
+grader is worse than none, and this one overstated it in the direction that makes a bound look
+stronger.
+
+`createJudge` now carries the bench it built (`judge.seats` — `requested`, `active`, `skipped`,
+frozen and non-writable), and the script reads the grader from there for the "graded by" line, the
+scope line, and the record's `family`/`model`. A skipped seat is now called out in the report, not
+just in a log line. The same fix corrected a quieter bug beside it: pacing used the **first
+requested** family's ceiling, so a solo OpenAI run paced itself against Gemini's the moment Gemini
+was declared and unkeyed. `calib-subtle-path.json` was corrected by hand (`seatNote`);
+`calib-subtle-cache.json` was run with `FELIX_JUDGE_FAMILY=openai`, so its label was already true.
+Records written from here on carry `seats` inline, so the mismatch is visible rather than assumed.
+
+#### The subtle class, measured — 2026-08-14. The cap was never the control here.
+
+`subtle-cache` was frozen (fingerprint `c4defc9849a5…`, unchanged from calibration) and rolled
+**598 times** — the k this script's own estimator prescribes — through the solo OpenAI seat at
+temperature 0. Record: `variance-2026-08-14-subtle-cache-openai-solo.json`.
+
+| | decisive case (600 rolls) | **subtle case (598 rolls)** |
+|---|---|---|
+| false greens | 0 / 600 | **85 / 598** |
+| point estimate | 0% | **14.2%** |
+| exact 95% upper bound | ≤ 0.498% | **≤ 16.78%** |
+| errors | 0 | 0 |
+
+**Both results are true. They are about different diffs, and the gap between them is the finding.**
+The same judge, same seat, same day, same temperature: flat zero on a decisively-unmet criterion,
+one-in-seven on a defect whose two halves are each individually correct.
+
+**The arithmetic that matters, and it is not "lower the cap".** At p = 14.2%, a **single** roll is
+already a 14.2% chance of a false green. There is no value of `maxJudgeRuns ≥ 1` that delivers a 5%
+ceiling for this class — the script's own branch prints "must drop to 1", and even 1 does not clear
+it. So this is **not** an argument for cutting the cap. It is the discovery that **the cap is the
+wrong instrument for this class of defect**, and was never doing the job this section originally
+credited it with.
+
+What `maxJudgeRuns` *does* do, stated at the size it actually is:
+
+- It bounds **amplification**. Re-rolling takes 14.2% to 78.4% across ten attempts. Capping the
+  re-rolls is a real and worthwhile damper on a cheap attack — it just is not a ceiling.
+- It bounds **cost**, which is its other, unglamorous job.
+- **Leaving it at 10 remains the right call.** Attempts are per-PR and lifetime, so ordinary
+  iterative pushes burn them; a cap of 1 breaks legitimate use and, per the arithmetic above, buys
+  no ceiling in exchange. Cutting it would be a real usability cost for a benefit that does not
+  exist.
+
+**What carries the ceiling instead, and how much of it is measured:**
+
+- **The unanimity jury.** `mergeJuryResults` needs *every* seated vendor to rule a criterion met, so
+  a jury false green requires the OpenAI seat to have flipped *too*: the jury rate is **≤ 14.2%**,
+  and that inequality is the only thing measured. How far below is **unmeasured**, and there is a
+  reason not to assume much: two frontier LLMs shown the same diff are not independent draws, and a
+  defect in the *relationship between hunks* is exactly the kind of blind spot that could be shared.
+  Running `subtle-cache` against a real two-vendor jury is the next measurement worth buying.
+- **Human review.** For the subtle class this is currently the backstop, not a formality. Felix's
+  own doctrine already says the judge is one input to a human decision; this number is what that
+  sentence costs when it is ignored.
+- **Criterion quality.** The pivot criterion says the cache is invalidated "**whenever**" an email
+  changes. That is a well-written, checkable criterion, and the judge still missed it once in seven
+  because checking it required relating two hunks. Criteria that can be verified hunk-locally are
+  graded far more reliably — 598/598 stable on both controls in this very run.
+
+**Two smaller things this run settled**, both of which the previous section had to hedge:
+
+- **Non-determinism is now evidenced inline.** 311 distinct judge texts across 598 rolls, in *this*
+  record's own `textDigest` fields — not inferred from a separate probe, as the 600-roll result had
+  to be.
+- **Controls did not mask the pivot.** Verdict-level greens (85) equal pivot flips (85) exactly, and
+  both control criteria came back 598/598 stable. The one-pivot fixture rule works: the measured
+  verdict rate *is* the pivot's rate, with nothing driving it toward zero.
+
+Calibration predicted this honestly (5/30 → 16.7%, bound ≤ 31.9%; measured 14.2%, bound ≤ 16.78%),
+which is the case for keeping the ~30-roll probe mandatory before any freeze.
+
+#### Which fixture is missing
+
+`subtle-cache` closed the subtle-but-unmet gap; `subtle-path` is authored but still a candidate, and
+the two-vendor jury run is now the open measurement. Design notes for whoever builds the next one —
+a **subtle-but-unmet** case is ground truth firmly NOT VERIFIED on careful reading, with a defect
+that needs two steps to see (an edge-case comparison, a flaw spanning two hunks, a default that
+changes a path):
+
+- **One pivot, decisive controls, no second unmet criterion.** Verdict-level VERIFIED needs *every*
+  criterion to come back met, so the existing fixture's decisively-unmet Map criterion drives
+  measured p to ~0 and **masks** whatever the subtle criterion is doing. That is a real limitation
+  of the 600-roll result, not a hypothetical.
+- **Calibrate ~30 rolls before freezing** (cents). If the judge is 0/30 or 30/30 on the pivot,
+  reshape the diff and re-probe. Fixture-shopping during authoring is legitimate — the attacker
+  searches diff-space for high p, so the measurement should too. The freeze rule starts when
+  full-k measurement starts, not during authoring. Add it as a **new file**; the two existing
+  fixtures never move.
+- **This was written before `subtle-cache` was run, predicting "if it comes back high (say 20%)".**
+  It came back at 14.2%, and the prediction of what to do about it held: an amendment, not a
+  retraction, and not cutting the cap. Left here as written because a pre-registered expectation
+  that survives contact with the number is worth more than one edited afterwards to match it. See
+  "The subtle class, measured" for what the number actually licensed.
+
+#### How to re-check it
+
+`scripts/smoke-judge-variance.js` re-rolls one **frozen** diff + spec (`test/fixtures/judge-variance-case.js`) through
+the real judge and reports how much the answer moved. Both shipped providers already send
+`temperature: 0`, so it measures production config — temp 0 bounds the sampler, it does not make a
+vendor's kernels deterministic.
+
+```bash
+npm run measure:variance                                   # plan + cost, calls nothing
+node scripts/smoke-judge-variance.js --spend --k 600       # a result with actual power
+npm run test:variance                                      # rehearse the maths offline, free
+```
+
+**It does not spend by default.** Every roll is a live billed call, so without `--spend` it prints
+the measured prompt size, the call count and a cost estimate, and exits having called nothing. It is
+not part of `npm test`.
+
+The result to be careful with is the *clean* one. Zero flips in 20 rolls reads like determinism and
+is not: zero events at k=20 still allows a per-roll rate near 14%, and at 14% ten rolls find a false
+green more often than not. The report says so on every run rather than leaving you to remember it,
+and names the k a real conclusion needs — **~598 rolls** to defend a cap of 10 at a 5% ceiling,
+roughly a dollar at current prices. On a clean sweep it now prints both bars side by side (union
+and compounding) with a ✓/✗ against each, so "did this actually clear?" is read off the report
+rather than worked out by hand. Under-powered null results are the failure mode this script is
+shaped around, which is why `npm run test:variance` drives the whole report against a *seeded* judge
+at a known flip rate and asserts the arithmetic recovers it. Rehearsals are stamped `synthetic` in
+both the report and the JSON record so one can never be filed as a measurement.
+
+#### Re-checking the pin when the description is edited
+
+The freeze only fires when Felix runs, and Felix runs on the events *your* workflow lists. A
+workflow that omits `edited` sees nothing when the body changes — and "edit the criteria after
+the final green, then merge" needs no push. Adding `edited` to the main workflow works, but pays
+for a full checkout, install and test suite on every typo fix, which is why people trim it.
+
+[`examples/felix-spec-sentinel.yml`](./examples/felix-spec-sentinel.yml) is the cheap version. It
+recomputes **only** the fingerprint from the PR body and its linked issues, and publishes its own
+check run:
+
+| | |
+| --- | --- |
+| 🔒 **frozen** | unchanged since Felix graded it |
+| 📌 **not pinned** | Felix has not graded these criteria yet |
+| ⚠️ **CHANGED** | the criteria moved. Restore them and this goes green on its own. |
+
+It checks out nothing, installs nothing, runs no PR code and never calls the judge — which is
+what makes `pull_request_target` (needed so the sentinel also works on fork PRs) safe here.
+`scripts/smoke-spec-sentinel.js` asserts that against the actual request log; it runs in CI.
+
+It deliberately does **not** write the `Felix verdict` check: sharing the name would let the
+sentinel overwrite a verdict it did not make, and after a revert there would be no drift and so
+nothing to write — leaving the verdict stuck red until someone pushed. **If you gate on Felix,
+mark both `Felix verdict` and `Felix spec pin` Required.**
 
 ### Driving the app (opt-in)
 

@@ -24,6 +24,7 @@
  *     bypass primitive, not a degradation — see PROMPT_REGION_FRACTIONS in budget.js.
  */
 
+const crypto = require('crypto');
 const { renderCriteriaList, DEFAULT_PROMPT_BUDGET_TOKENS } = require('./prompt');
 const { regionCapChars } = require('./budget');
 
@@ -76,14 +77,67 @@ function extractCriteria(text = '') {
   return dedupe(out);
 }
 
+/**
+ * The canonical form of ONE criterion.
+ *
+ * Extracted rather than left inline because the dedupe and the fingerprint below must agree
+ * by construction. If two texts collapse to a single criterion here, they have to collapse to
+ * a single hash input too — otherwise swapping a bullet between two whitespace variants of
+ * itself changes the fingerprint while changing nothing the judge sees, and the author gets a
+ * free re-baseline out of a cosmetic edit.
+ */
+function normKey(s) {
+  return String(s).toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 function dedupe(arr) {
   const seen = new Set();
   return arr.filter((s) => {
-    const k = s.toLowerCase().replace(/\s+/g, ' ').trim();
+    const k = normKey(s);
     if (seen.has(k)) return false;
     seen.add(k);
     return true;
   });
+}
+
+const NUL = String.fromCharCode(0);
+
+/**
+ * A stable fingerprint of the criteria set a run was graded against — the pin that makes the
+ * rubric immutable to its own author mid-flight.
+ *
+ * Felix reads its criteria out of the PR body, the one artifact the PR author holds a pen over.
+ * Without a pin, the cheapest response to "criterion not met" is to delete the criterion, and
+ * that is not hypothetical even without an agent in the loop — a green check can be earned
+ * against one spec and merged while displaying another. An autonomous fixer just finds that door
+ * faster than a person does.
+ *
+ * Re-running on the edit does NOT close it: a re-run with no pin re-grades whatever the body now
+ * says and can return an honest VERIFIED against the new set, with nothing recording that the set
+ * moved after a grade. Only a pin turns the change itself into the finding. See verdict.js's
+ * spec_changed note for the trigger coverage that remains open.
+ *
+ * Three properties are load-bearing:
+ *   - it hashes the SAME array index.js hands the judge (`mapped[].text`), not the raw sources.
+ *     Same discipline as the size measurement below: measure the real thing, never a proxy.
+ *   - it hashes normKey() output, so the hash agrees with the dedupe (see above).
+ *   - it SORTS. Reordering criteria is cosmetic and must not trip the freeze; any add, delete
+ *     or reword must. No algorithm can separate a typo fix from a weakening, so both trip it
+ *     and both route through the human relief valve. That is the intended trade, not a gap.
+ *
+ * Separator is NUL, which cannot appear in a markdown bullet, so no pair of criteria can be
+ * concatenated into a colliding preimage.
+ *
+ * Returns null for an empty set — "there was nothing to pin", which is a different state from
+ * "pinned the empty set" and is what lets a `no_spec` PR legitimately gain criteria later.
+ */
+function specFingerprint(criteria) {
+  const texts = (criteria || [])
+    .map((c) => normKey(typeof c === 'string' ? c : (c && c.text) || ''))
+    .filter(Boolean)
+    .sort();
+  if (!texts.length) return null;
+  return crypto.createHash('sha256').update(texts.join(NUL), 'utf8').digest('hex');
 }
 
 const STOP = new Set(('the a an and or of to in on for with is are be should must when then ' +
@@ -156,6 +210,10 @@ function buildSpec(pr, issues, files, { maxCriteriaChars = criteriaCapChars() } 
     source: sources.length ? sources.join(', ') : null,
     hadRealSpec,
     criteria: mapped,
+    // Computed on `mapped` for the same reason renderedChars is: it is the array that
+    // actually reaches the judge. Present on every spec, including fallback and over-limit
+    // ones — WHETHER to pin it is index.js's decision, not this function's.
+    fingerprint: specFingerprint(mapped),
     total: mapped.length,
     mappedCount: mapped.filter((c) => c.mapped).length,
     size: {
@@ -168,4 +226,5 @@ function buildSpec(pr, issues, files, { maxCriteriaChars = criteriaCapChars() } 
 
 module.exports = {
   buildSpec, extractCriteria, linkedIssueNumbers, mapCriterion, keywords, criteriaCapChars,
+  specFingerprint, normKey,
 };

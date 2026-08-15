@@ -6,6 +6,16 @@ branding:
   color: 'blue'
 
 inputs:
+  mode:
+    description: >-
+      "verify" (default) runs the full pipeline: checkout, install, Tier 1, judge, verdict.
+      "spec-sentinel" recomputes ONLY the acceptance-criteria fingerprint and compares it to the
+      pin, publishing a separate "Felix spec pin" check. It fetches no PR code, installs nothing,
+      runs nothing from the pull request and never calls the judge — which is what makes it safe
+      to trigger from pull_request_target. Use it on `pull_request: edited`, where re-running the
+      whole pipeline on every body edit is what makes adopters drop the trigger.
+    required: false
+    default: 'verify'
   judge-family:
     description: 'Cross-family judge vendor: "openai" (default) or "gemini". Set the matching key below.'
     required: false
@@ -61,6 +71,7 @@ runs:
       run: npm ci || npm install
 
     - name: Run Felix
+      if: inputs.mode != 'spec-sentinel'
       shell: bash
       working-directory: ${{ github.action_path }}
       env:
@@ -78,3 +89,20 @@ runs:
         "${{ github.repository }}#${{ github.event.pull_request.number }}"
         ${{ inputs.post == 'true' && '--post' || '--dry-run' }}
         --repo-path "${{ inputs.repo-path }}"
+
+    # No repo-path, no judge key, and nothing from the pull request is fetched or executed. The
+    # only inputs are the PR body and its linked issues, read over the API and hashed.
+    - name: Re-check the spec pin
+      if: inputs.mode == 'spec-sentinel'
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        SUPABASE_URL: ${{ inputs.supabase-url }}
+        SUPABASE_SERVICE_ROLE_KEY: ${{ inputs.supabase-service-role-key }}
+        FELIX_DRY_RUN: ${{ inputs.post == 'true' && 'false' || 'true' }}
+        FELIX_POST_COMMENT: ${{ inputs.post }}
+      run: >-
+        node bin/felix.js spec-sentinel
+        "${{ github.repository }}#${{ github.event.pull_request.number }}"
+        ${{ inputs.post == 'true' && '--post' || '--dry-run' }}

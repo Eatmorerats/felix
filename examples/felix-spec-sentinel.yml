@@ -1,0 +1,68 @@
+# Felix — spec pin sentinel. Copy to .github/workflows/felix-spec-sentinel.yml.
+#
+# WHAT IT IS FOR
+#
+# Felix's acceptance criteria live in the pull request description, which the author keeps write
+# access to. So a green check means "these criteria were met" only for as long as "these criteria"
+# stays the same set. Felix pins a fingerprint of the set the first time it grades one; this
+# workflow is what re-checks that pin when the description changes, WITHOUT re-running the whole
+# pipeline on every edit.
+#
+# It fetches no PR code, checks out nothing from the pull request, installs nothing, runs nothing
+# from the head ref, and never calls the judge. It reads the PR body and its linked issues over
+# the API, hashes the criteria, and compares. That is the entire job.
+#
+# It publishes its own check run, "Felix spec pin", and never touches "Felix verdict":
+#   🔒 frozen     the criteria are unchanged since Felix graded them
+#   📌 not pinned Felix has not graded these criteria yet — nothing is frozen
+#   ⚠️ CHANGED    the criteria moved after a grade. Restore them and this goes green on its own.
+#
+# ── IF YOU GATE ON FELIX, MARK **BOTH** CHECKS REQUIRED ──────────────────────────────────────
+# "Felix verdict" AND "Felix spec pin". A check nobody marks Required is advisory, and this one is
+# the only thing standing between "edit the criteria after the final green" and a merge.
+
+name: Felix spec pin
+
+# pull_request_target, NOT pull_request — and the reason is worth reading before you copy it.
+#
+# `pull_request` gives a fork PR no secrets and a read-only token, so on a fork this job could
+# neither read the verdict store nor write a check run: the sentinel would be silently absent on
+# exactly the PRs least trusted. `pull_request_target` runs in the BASE repo's context, with the
+# base repo's secrets and a writable token.
+#
+# That trigger is normally dangerous because workflows using it check out and execute head code
+# with those credentials. THIS ONE MUST NOT, and does not:
+#   - there is no actions/checkout of the pull request. There is no checkout at all — the action
+#     brings its own code.
+#   - nothing from the PR is executed. The PR body is read as data and hashed.
+# If you edit this file, keep both of those true. Adding a checkout of `github.event.pull_request.head.sha`
+# would hand PR-authored code a token that can write checks on your repo.
+on:
+  pull_request_target:
+    types: [edited]
+
+permissions:
+  contents: read   # read felix.config.json from the base ref (gating policy)
+  checks: write    # publish the "Felix spec pin" check run
+  pull-requests: read
+
+concurrency:
+  # No cancel-in-progress. A cancelled sentinel writes no check run, which leaves whatever was
+  # there before standing — and "whatever was there before" is precisely the stale green this
+  # workflow exists to overwrite. Rapid successive edits should QUEUE, not cancel.
+  group: felix-spec-pin-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  spec-pin:
+    runs-on: ubuntu-latest
+    steps:
+      # Pin this to a commit SHA rather than @main for anything you actually gate on: @main means
+      # whatever that branch says today.
+      - uses: Eatmorerats/felix@v1   # pin a tag — @main changes under you
+        with:
+          mode: spec-sentinel
+          # The verdict store IS the pin. Without these the sentinel has nothing to compare
+          # against, and it will say so rather than passing quietly.
+          supabase-url: ${{ secrets.SUPABASE_URL }}
+          supabase-service-role-key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

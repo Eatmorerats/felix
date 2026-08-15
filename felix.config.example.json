@@ -104,7 +104,9 @@
 
   "judge": {
     "$comment": "Tier 3 cross-family LLM judge. adversarial=true uses a refute-first prompt — the judge must state the strongest reason each criterion is NOT met before deciding, which cuts over-eager 'met' verdicts. Off by default; FELIX_JUDGE_ADVERSARIAL=true is the global/Action equivalent.",
-    "adversarial": false
+    "adversarial": false,
+    "$comment2": "maxJudgeRuns caps how many times ONE pull request may be graded by the judge, counted over its LIFETIME from the verdict log — a fresh push does not reset it. The judge is a language model and is not deterministic, so re-running an unchanged diff is a way to obtain a green check by repetition rather than by changing the code; at a 10% per-run false-pass rate, seven rolls win more often than not. A PR that runs out lands on NOT VERIFIED (attempts_exhausted); a maintainer can override, or the work can be split into a new PR with its own budget. Default 10 — that number is binomial arithmetic, not measurement. Requires the verdict log (SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY): without it Felix cannot count, and a repo with gating.enabled will REFUSE to publish a verdict rather than pretend it did.",
+    "maxJudgeRuns": 10
   },
 
   "crap": {

@@ -36,12 +36,21 @@ const {
 } = require('../src/engine/deps');
 const picomatchLib = require('picomatch');
 const { parseTarget } = require('../src/engine/github');
-const { render } = require('../src/engine/comment');
-const { triageFiles, triggerGate, NEVER_SKIP, baseConfigFetcher, run: felixRun } = require('../src/engine');
+const { render, renderFreeze } = require('../src/engine/comment');
+const {
+  resolveFreeze, pinnableFingerprint, decideSpecDrift, decideAttempts, refuseOnUnprovenFreeze,
+  DEFAULT_FREEZE,
+} = require('../src/engine/freeze');
+const { triageFiles, triggerGate, NEVER_SKIP, baseConfigFetcher, shouldRunJudge, run: felixRun } = require('../src/engine');
 const { resolveIsolation, wrapCommand, assertJailCoherent, preflightDocker } = require('../src/engine/isolation');
 const { renderError } = require('../src/engine/comment');
 const { computeMetrics, OUTCOMES } = require('../src/engine/calibration');
 const { resolveGating, gateDecision } = require('../src/engine/gating');
+const {
+  RETRYABLE_CAUSES, DEFAULT_LOOP_MAX_ATTEMPTS, loopSession,
+  resolveBaseRef, parseNameStatus, attachPatches,
+  localBaseConfigFetcher, judgeGuard, loadCriteria,
+} = require('../src/engine/preflight');
 const { parseRevertedPR, detectRevertedPRs } = require('../src/engine/outcomes');
 const { FIXTURES, oracleJudge, truthOutcome } = require('./calibration-fixtures');
 const { buildDrivePlan, interpretProbe, joinUrl, resolveDrive, interpretPageLoad, loadChromium } = require('../src/engine/drive');
@@ -534,6 +543,33 @@ test('an unknown judge family fails loud and names the supported families', () =
   assert.match(msg, /not supported/);
   assert.match(msg, /openai/);
   assert.match(msg, /gemini/);
+});
+// The recorder used to name the grader from FELIX_JUDGE_FAMILY, so a variance run that declared
+// `openai,gemini` with no GEMINI_API_KEY printed "measured against a 2-vendor JURY" for a SOLO
+// openai run — overstating the grader, which is the direction that makes a bound look stronger.
+// `judge.seats` is the fix: the bench as BUILT, carried by the judge itself.
+test('the judge carries the bench it actually built, not the families that were asked for', () => {
+  const judge = createJudge({ FELIX_JUDGE_FAMILY: 'openai,gemini', OPENAI_API_KEY: 'sk' });
+  assert.deepStrictEqual(judge.seats.requested, ['openai', 'gemini']);
+  assert.deepStrictEqual(judge.seats.active, [{ family: 'openai', model: 'gpt-4.1' }]);
+  assert.strictEqual(judge.seats.skipped.length, 1);
+  assert.strictEqual(judge.seats.skipped[0].family, 'gemini');
+  assert.match(judge.seats.skipped[0].reason, /GEMINI_API_KEY/);
+});
+test('a fully keyed jury reports both seats active and nothing skipped', () => {
+  const judge = createJudge({ FELIX_JUDGE_FAMILY: 'openai,gemini', OPENAI_API_KEY: 'sk', GEMINI_API_KEY: 'g' });
+  assert.deepStrictEqual(judge.seats.active.map((s) => s.family), ['openai', 'gemini']);
+  assert.deepStrictEqual(judge.seats.skipped, []);
+});
+test('the bench cannot be relabelled by the caller that was handed it', () => {
+  const judge = createJudge({ OPENAI_API_KEY: 'sk' });
+  // Asserted on the descriptor, not by attempting a write: whether a rejected write THROWS or is
+  // silently dropped depends on the caller's strict mode, and the property is the invariant.
+  const desc = Object.getOwnPropertyDescriptor(judge, 'seats');
+  assert.strictEqual(desc.writable, false);
+  assert.strictEqual(desc.configurable, false);
+  assert.ok(Object.isFrozen(judge.seats) && Object.isFrozen(judge.seats.active));
+  assert.deepStrictEqual(judge.seats.active.map((s) => s.family), ['openai']);
 });
 test('PROVIDERS declares per-family defaults so a gemini run never inherits the gpt default', () => {
   assert.strictEqual(PROVIDERS.openai.defaultModel, 'gpt-4.1');
@@ -1105,13 +1141,16 @@ atest('the preflight never runs in mode none, and passes when docker answers', a
 // shipped as dead code. So this drives the real run() and asserts it REJECTS, which is also the
 // property that matters at the gate: a rejection never reaches finalize(), so no check run is
 // created and a Required check cannot go green.
-function stubGitHubFor(baseConfig) {
+function stubGitHubFor(baseConfig, prOverrides = {}) {
   const prior = globalThis.fetch;
   const pr = {
     number: 1, title: 'add a thing', body: 'closes #2', draft: false,
     head: { sha: 'headsha', repo: { fork: false, full_name: 'o/r' } },
     base: { sha: 'basesha', ref: 'main', repo: { full_name: 'o/r' } },
     labels: [],
+    // Body/labels are overridable so a test can drive a run that has a REAL spec — the freeze
+    // and the attempt cap only engage on a run that could otherwise reach VERIFIED.
+    ...prOverrides,
   };
   const reply = (body, type) => ({
     ok: true, status: 200,
@@ -1119,15 +1158,22 @@ function stubGitHubFor(baseConfig) {
     json: async () => body,
     text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
   });
-  globalThis.fetch = async (url) => {
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
     const u = String(url);
+    calls.push({ url: u, method: (init && init.method) || 'GET', body: init && init.body });
     if (/\/contents\/felix\.config\.json/.test(u)) return reply(JSON.stringify(baseConfig), 'text');
     if (/\/contents\?ref=/.test(u)) return reply([{ name: 'felix.config.json', type: 'file' }], 'json');
     if (/\/files/.test(u)) return reply([{ filename: 'src/a.js', status: 'modified', additions: 3, deletions: 0 }], 'json');
     if (/\/pulls\/1$/.test(u)) return reply(pr, 'json');
     return reply({}, 'json');
   };
-  return () => { globalThis.fetch = prior; };
+  const restore = () => { globalThis.fetch = prior; };
+  // Every request the run made, so a test can assert what Felix PUBLISHED and not merely that it
+  // rejected. Hung off the restore fn so the existing `const restore = stubGitHubFor(...)` callers
+  // are untouched.
+  restore.calls = calls;
+  return restore;
 }
 
 // repoPath is a temp dir that is deliberately NOT a git repo, and that is what makes these tests
@@ -2043,6 +2089,61 @@ test('paceMs converts tokens spent into a share of the per-minute window', () =>
   assert.strictEqual(paceMs(30000, 30000), 60000);     // a full minute's budget ⇒ wait a minute
   assert.strictEqual(paceMs(15000, 30000), 30000);
   assert.strictEqual(paceMs(1000, 0), 0);              // unknown tpm ⇒ don't stall
+});
+
+test('paceMs also honours a requests-per-minute ceiling, and takes the LARGER wait', () => {
+  // The gap this closes: a small prompt buys almost no token wait, so the tokens term alone lets a
+  // seat fire ~29 requests a minute while believing it is inside budget. A 10 RPM key 429s on the
+  // third one.
+  assert.strictEqual(paceMs(1000, 30_000, 10), 6000);   // 2s by tokens, 6s by requests ⇒ 6s
+  assert.strictEqual(paceMs(30_000, 30_000, 10), 60_000); // 60s by tokens dominates ⇒ 60s
+  // Clearing one ceiling and busting the other is still a 429, so it is max, never min or sum.
+  assert.strictEqual(paceMs(1000, 30_000, 1), 60_000);
+  // Opt-in: unset, zero and negative all mean "no request ceiling known", not "wait forever".
+  assert.strictEqual(paceMs(1000, 30_000), 2000);
+  assert.strictEqual(paceMs(1000, 30_000, 0), 2000);
+  assert.strictEqual(paceMs(1000, 30_000, -5), 2000);
+  // And with neither ceiling known it still must not stall.
+  assert.strictEqual(paceMs(1000, 0, 0), 0);
+});
+
+test('no shipped family hardcodes an rpm — the measured ones did not bind (2026-08-14)', () => {
+  // A number here would read as measured. Both keys cleared a concurrent burst with zero 429s
+  // (openai 60 in 2.8s, gemini 250 in 19.2s), so the honest registry entry is absence. A
+  // free-tier key sets FELIX_JUDGE_RPM instead — see scripts/probe-vendor-rpm.js.
+  for (const family of Object.keys(PROVIDERS)) {
+    assert.strictEqual(PROVIDERS[family].rpm, undefined, `${family} hardcodes an unmeasured rpm`);
+  }
+});
+
+atest('FELIX_JUDGE_RPM reaches the real call path — a low-tier key paces instead of retrying', async () => {
+  // Driven through the chunked path with a sleep spy, not by re-asserting paceMs: the arithmetic
+  // is already pinned above, and what was actually missing was the WIRING. A test that rebuilds a
+  // judge and then checks the helper would pass with the override going nowhere.
+  const body = { choices: [{ message: { content: JSON.stringify({ assessment: 'p', criteria: [{ text: 'c', verdict: 'not_shown' }] }) } }] };
+  const run = async (env) => {
+    const waits = [];
+    const ff = fakeFetch(body);
+    await createJudge(
+      { OPENAI_API_KEY: 'sk', FELIX_JUDGE_MAX_PROMPT_TOKENS: '1000', ...env },
+      { fetchImpl: ff, sleepImpl: async (ms) => { waits.push(ms); } },
+    )({ prTitle: 'p', criteria: [{ text: 'c' }], diff: bigDiff(8, 500), tier1: [] });
+    assert.ok(ff.calls.length > 1, 'the diff must chunk for there to be any pacing at all');
+    return waits;
+  };
+
+  // rpm 1 (a 60s floor), because forcing a chunked run also drops tpm to the same 1000 and its
+  // tokens term is already ~52s. The override has to be the LARGER term for the max() to be
+  // observable at all — picking a floor under it would pass whether or not it was wired.
+  const paced = await run({ FELIX_JUDGE_RPM: '1' });
+  assert.ok(paced.length, 'a chunked run must pace between requests');
+  assert.ok(paced.every((ms) => ms === 60_000), `every wait should be the 1 RPM floor, got ${paced}`);
+
+  // Control: the same run without the override is governed by the tokens term alone and waits
+  // strictly less — so the assertion above is about the override, not about pacing existing.
+  const unpaced = await run({});
+  assert.ok(unpaced.length && unpaced.every((ms) => ms < 60_000),
+    `without the override waits stay under the floor, got ${unpaced}`);
 });
 
 test('chunkVerdict reads the 3-valued verdict, and a stray boolean false means not_shown', () => {
@@ -3564,6 +3665,530 @@ test('an oversized spec outranks the no_spec branch', () => {
   assert.strictEqual(v.cause, CAUSES.SPEC_TOO_LARGE);
 });
 
+// ── The spec freeze (spec_changed) and the judge attempt cap (attempts_exhausted) ────────────
+//
+// Both exist because Felix grades criteria the AUTHOR writes, with a judge that is not
+// deterministic. Neither hole needs an agent in the loop to be real: Felix never runs on
+// `pull_request: edited`, and nothing counts judge calls.
+
+const okSpec = (over = {}) => ({
+  hadRealSpec: true, size: { overLimit: false, renderedChars: 100, limitChars: 9999 },
+  total: 2, criteria: [{ text: 'a' }, { text: 'b' }], fingerprint: 'aaaa1111', ...over,
+});
+const drift = { changed: true, baseline: 'aaaa1111cafe', current: 'bbbb2222beef', respecLabel: 'felix-respec' };
+
+test('criteria that change after grading land on spec_changed, NOT VERIFIED', () => {
+  const v = compose({ spec: okSpec(), tier1: [], tier3: null, judgeStatus: {}, specDrift: drift });
+  assert.strictEqual(v.verdict, VERDICTS.NOT_VERIFIED);
+  assert.strictEqual(v.cause, CAUSES.SPEC_CHANGED);
+  assert.strictEqual(conclusionFor(v.verdict), 'failure', 'must be failure, never a passing neutral');
+});
+
+test('spec_changed names both relief valves, and the configured respec label', () => {
+  const v = compose({ spec: okSpec(), tier1: [], tier3: null, judgeStatus: {}, specDrift: drift });
+  const text = v.required_to_pass.join(' ');
+  assert.ok(/restore the previous criteria/i.test(text), 'must offer the free, human-free fix first');
+  assert.ok(text.includes('felix-respec'), 'must name the actual configured label, not a hardcoded one');
+});
+
+test('spec_changed is not exemptable — an adopter cannot configure a rewritten rubric to pass', () => {
+  assert.ok(!INSUFFICIENT_CAUSES.includes(CAUSES.SPEC_CHANGED),
+    'spec_changed must stay out of INSUFFICIENT_CAUSES or gating could exempt it');
+  assert.throws(
+    () => resolveGating({ gating: { insufficientExempt: ['spec_changed'] } }),
+    /unrecognized value/i);
+});
+
+test('spec_changed outranks a Tier 1 hard failure — drift cannot be masked by breaking a test', () => {
+  // Both are NOT VERIFIED, so ordering cannot open a lane. It decides the recorded CAUSE, and
+  // the cause is what the next run reads to know whether the spec moved.
+  const v = compose({
+    spec: okSpec(), tier1: [{ name: 'tests', hard: true, status: 'fail', detail: 'boom' }],
+    tier3: null, judgeStatus: {}, specDrift: drift,
+  });
+  assert.strictEqual(v.cause, CAUSES.SPEC_CHANGED);
+});
+
+test('spec_changed outranks attempts_exhausted — the rubric moving is the more specific fault', () => {
+  const v = compose({
+    spec: okSpec(), tier1: [], tier3: null, judgeStatus: {},
+    specDrift: drift, attempts: { exhausted: true, used: 10, limit: 10 },
+  });
+  assert.strictEqual(v.cause, CAUSES.SPEC_CHANGED);
+});
+
+test('no drift, or a first run with nothing pinned, does not fire spec_changed', () => {
+  for (const d of [undefined, null, { changed: false }, { changed: false, baseline: null }]) {
+    const v = compose({ spec: okSpec(), tier1: [], tier3: null, judgeStatus: { configured: false }, specDrift: d });
+    assert.notStrictEqual(v.cause, CAUSES.SPEC_CHANGED, `specDrift=${JSON.stringify(d)}`);
+  }
+});
+
+test('an exhausted judge budget lands on attempts_exhausted, NOT VERIFIED', () => {
+  const v = compose({
+    spec: okSpec(), tier1: [], tier3: null, judgeStatus: {},
+    attempts: { exhausted: true, used: 10, limit: 10 },
+  });
+  assert.strictEqual(v.verdict, VERDICTS.NOT_VERIFIED);
+  assert.strictEqual(v.cause, CAUSES.ATTEMPTS_EXHAUSTED);
+  assert.strictEqual(conclusionFor(v.verdict), 'failure');
+  assert.ok(v.required_to_pass.join(' ').includes('10'), 'must tell the author what the budget was');
+});
+
+test('attempts_exhausted is not exemptable — resampling cannot be configured back on', () => {
+  assert.ok(!INSUFFICIENT_CAUSES.includes(CAUSES.ATTEMPTS_EXHAUSTED));
+  assert.throws(
+    () => resolveGating({ gating: { insufficientExempt: ['attempts_exhausted'] } }),
+    /unrecognized value/i);
+});
+
+test('attempts_exhausted never fires while the PR still has budget', () => {
+  const v = compose({
+    spec: okSpec(), tier1: [], tier3: null, judgeStatus: { configured: false },
+    attempts: { exhausted: false, used: 3, limit: 10 },
+  });
+  assert.notStrictEqual(v.cause, CAUSES.ATTEMPTS_EXHAUSTED);
+});
+
+test('both new causes still yield to the maintainer override label', () => {
+  // Relief for a NOT VERIFIED verdict already exists via overrideLabel; these causes must not
+  // have accidentally become unappealable.
+  const g = resolveGating({ gating: { enabled: true, overrideLabel: 'felix-override' } });
+  for (const cause of [CAUSES.SPEC_CHANGED, CAUSES.ATTEMPTS_EXHAUSTED]) {
+    const d = gateDecision({ verdict: VERDICTS.NOT_VERIFIED, cause, gating: g, labels: ['felix-override'] });
+    assert.strictEqual(d.blocks, false, cause);
+    assert.strictEqual(d.overridden, true, cause);
+  }
+});
+
+test('both new causes block a gated repo by default', () => {
+  const g = resolveGating({ gating: { enabled: true } });
+  for (const cause of [CAUSES.SPEC_CHANGED, CAUSES.ATTEMPTS_EXHAUSTED]) {
+    assert.strictEqual(gateDecision({ verdict: VERDICTS.NOT_VERIFIED, cause, gating: g, labels: [] }).blocks, true, cause);
+  }
+});
+
+// ── freeze.js — policy resolution and the pure decisions index.js wires in ───────────────────
+
+console.log('freeze + attempt cap — policy and decisions (freeze.js)');
+
+test('maxJudgeRuns defaults to 10 and an explicit value is honoured', () => {
+  assert.strictEqual(resolveFreeze({}).maxJudgeRuns, 10);
+  assert.strictEqual(resolveFreeze({}).maxJudgeRuns, DEFAULT_FREEZE.maxJudgeRuns);
+  assert.strictEqual(resolveFreeze({ judge: { maxJudgeRuns: 3 } }).maxJudgeRuns, 3);
+  // The key coexists with the block's existing member rather than replacing it.
+  assert.strictEqual(resolveFreeze({ judge: { adversarial: true, maxJudgeRuns: 4 } }).maxJudgeRuns, 4);
+});
+
+test('a present-but-wrong maxJudgeRuns is a config error, never a silent default', () => {
+  // The quiet-lie failure gating.js's assertKnown exists to remove: an adopter who wrote "5"
+  // and silently got 10 believes they have a budget they do not have.
+  for (const bad of ['10', 0, -1, 2.5, null, true, [], {}, NaN, Infinity]) {
+    assert.throws(() => resolveFreeze({ judge: { maxJudgeRuns: bad } }), /maxJudgeRuns/,
+      `maxJudgeRuns: ${JSON.stringify(bad)} must be refused by name`);
+  }
+});
+
+test('a judge block that is not an object is refused by name', () => {
+  for (const bad of [true, 'yes', 7, ['a'], null]) {
+    assert.throws(() => resolveFreeze({ judge: bad }), /judge must be an object/);
+  }
+  assert.strictEqual(resolveFreeze({}).maxJudgeRuns, 10, 'an absent block still takes the default');
+});
+
+test('only a real, gradeable spec is pinnable — the fingerprint that is logged is the one compared', () => {
+  const fp = 'abc123def456789';
+  assert.strictEqual(pinnableFingerprint(okSpec({ fingerprint: fp })), fp);
+  assert.strictEqual(pinnableFingerprint(okSpec({ fingerprint: fp, hadRealSpec: false })), null,
+    'a PR-title fallback was never graded, so pinning it would flag the first real criteria as drift');
+  assert.strictEqual(pinnableFingerprint(okSpec({ fingerprint: fp, size: { overLimit: true } })), null,
+    'an over-limit spec never reaches the judge');
+  assert.strictEqual(pinnableFingerprint(null), null);
+  assert.strictEqual(pinnableFingerprint({ hadRealSpec: true, size: {} }), null, 'no fingerprint ⇒ nothing to pin');
+});
+
+test('drift needs BOTH sides — a first run and an ungradeable spec are not drift', () => {
+  assert.strictEqual(decideSpecDrift({ current: 'aaa', baseline: 'bbb' }).changed, true);
+  assert.strictEqual(decideSpecDrift({ current: 'aaa', baseline: 'aaa' }).changed, false);
+  assert.strictEqual(decideSpecDrift({ current: 'aaa', baseline: null }).changed, false,
+    'nothing pinned yet is a legitimate first run, not a rewritten rubric');
+  assert.strictEqual(decideSpecDrift({ current: null, baseline: 'bbb' }).changed, false,
+    'this run is not gradeable, so it is not being graded against a moved spec');
+  assert.strictEqual(decideSpecDrift().changed, false);
+});
+
+test('the attempt cap counts spent attempts and closes AT the limit, not past it', () => {
+  assert.strictEqual(decideAttempts({ used: 9, limit: 10 }).exhausted, false);
+  assert.strictEqual(decideAttempts({ used: 10, limit: 10 }).exhausted, true, '>=, not > — at the limit the budget is gone');
+  assert.strictEqual(decideAttempts({ used: 11, limit: 10 }).exhausted, true);
+  assert.strictEqual(decideAttempts({ used: 3, limit: 10 }).remaining, 7);
+  assert.strictEqual(decideAttempts({ used: 99, limit: 10 }).remaining, 0, 'remaining never goes negative');
+  assert.strictEqual(decideAttempts().used, 0, 'a missing count is zero spent, not zero budget');
+});
+
+// ── The fail-closed rule ─────────────────────────────────────────────────────────────────────
+//
+// This is the one place "logging must never block a verdict" is deliberately overridden, so the
+// truth table gets pinned rather than trusted to the prose in freeze.js.
+
+const GATED = { enabled: true, blockOn: ['NOT VERIFIED'], overrideLabel: 'felix-override' };
+const unproven = (over = {}) => refuseOnUnprovenFreeze({
+  available: false, gating: GATED, labels: [], couldReachVerified: true, ...over,
+});
+
+test('a gated repo REFUSES when the store cannot prove the freeze or the cap', () => {
+  const r = unproven();
+  assert.strictEqual(r.refuse, true);
+  assert.ok(/freeze/i.test(r.reason) && /attempt cap/i.test(r.reason), 'the refusal must name what went unproven');
+});
+
+test('an available store never refuses, whatever the gating', () => {
+  assert.strictEqual(refuseOnUnprovenFreeze({ available: true, gating: GATED, labels: [], couldReachVerified: true }).refuse, false);
+});
+
+test('an advisory repo warns and proceeds — an unproven control can block nothing there', () => {
+  assert.strictEqual(unproven({ gating: { enabled: false } }).refuse, false);
+  assert.strictEqual(unproven({ gating: undefined }).refuse, false);
+});
+
+test('the refusal keys on gating.enabled, NOT on blockOn — narrowing it to blockOn was a fail-open', () => {
+  // `blockOn: ["INSUFFICIENT EVIDENCE"]` is valid config (assertKnown accepts it) and looks like
+  // "this repo does not block on NOT VERIFIED". It is not: when gateDecision says a verdict does
+  // not block, index.js falls through to conclusionFor(), and NOT VERIFIED maps to `failure`. So
+  // a PROVEN spec_changed reddens a Required check there — meaning store-up and store-down would
+  // reach DIFFERENT outcomes if the refusal were narrowed to blockOn. That divergence is the bug.
+  assert.strictEqual(conclusionFor(VERDICTS.NOT_VERIFIED), 'failure',
+    'the premise: NOT VERIFIED fails the check whatever blockOn says');
+  assert.strictEqual(unproven({ gating: { enabled: true, blockOn: ['INSUFFICIENT EVIDENCE'], overrideLabel: 'felix-override' } }).refuse, true);
+  assert.strictEqual(unproven({ gating: { enabled: true, blockOn: [] } }).refuse, true);
+});
+
+test('a run that cannot reach VERIFIED has no pass to launder, so it is not refused', () => {
+  // Load-bearing: fork PRs get no secrets AT ALL, so the store is unavailable there by
+  // construction. Without this conjunct every fork PR on a gated repo would hard-error forever.
+  assert.strictEqual(unproven({ couldReachVerified: false }).refuse, false);
+});
+
+test('the maintainer override label is the escape hatch when the store is down', () => {
+  // Without it, "gating on + Supabase key expired" is a repo that can merge nothing at all.
+  assert.strictEqual(unproven({ labels: ['felix-override'] }).refuse, false);
+  assert.strictEqual(unproven({ labels: ['some-other-label'] }).refuse, true, 'an unrelated label is not an override');
+});
+
+test('the refusal tells the operator how to fix it', () => {
+  const r = unproven({ storeReason: 'connection refused' });
+  assert.ok(r.reason.includes('SUPABASE_URL'), 'name the env that is missing');
+  assert.ok(r.reason.includes('felix-override'), 'name the escape hatch');
+  assert.ok(r.reason.includes('connection refused'), 'pass through what the store actually said');
+});
+
+// ── The wiring itself ────────────────────────────────────────────────────────────────────────
+//
+// The unit tests above prove the decisions are RIGHT; they prove nothing about whether index.js
+// calls them. Both new causes shipped as dead code once already — compose() accepted specDrift
+// and attempts that no caller passed. So this drives the real run() and asserts the refusal
+// fires, which is only reachable if step 4b actually executes.
+
+atest('run() refuses BEFORE the sandbox when a gated repo cannot read its verdict history', async () => {
+  const restore = stubGitHubFor(
+    { gating: { enabled: true, blockOn: ['NOT VERIFIED'] }, commands: { test: 'true' } },
+    { body: '## Acceptance criteria\n- [ ] POST /api/x returns 201\n- [ ] it logs the id\n' }
+  );
+  const repoPath = notAGitRepo();
+  try {
+    await assert.rejects(
+      // No SUPABASE_* in this env, so fetchPriorRuns reports available:false.
+      () => felixRun({ target: 'o/r#1', repoPath, dryRun: true, post: false, env: { GITHUB_TOKEN: 't' } }),
+      /spec freeze and the judge attempt cap are both unproven/,
+      'a gated repo with no verdict store must abort before any PR code runs, not publish a verdict resting on checks that did not run'
+    );
+  } finally { restore(); fs.rmSync(repoPath, { recursive: true, force: true }); }
+});
+
+atest('the refusal publishes a FAILING check run before it throws', async () => {
+  // The load-bearing half, and the reason a bare throw is not fail-closed. Check runs persist on
+  // their head SHA until something PATCHes them, and `pull_request: edited` fires on the SAME
+  // SHA — so a PR graded VERIFIED while the store was healthy, then edited while it is down,
+  // would keep its green if the refusal only threw. That is the spec-drift attack surviving
+  // because of the guard meant to catch it.
+  const restore = stubGitHubFor(
+    { gating: { enabled: true }, commands: { test: 'true' } },
+    { body: '## Acceptance criteria\n- [ ] POST /api/x returns 201\n' }
+  );
+  const repoPath = notAGitRepo();
+  try {
+    await assert.rejects(() => felixRun({
+      target: 'o/r#1', repoPath, dryRun: false, post: true, env: { GITHUB_TOKEN: 't' },
+    }), /unproven/);
+    const published = restore.calls.filter((c) => c.method === 'POST' && /\/check-runs$/.test(c.url));
+    assert.strictEqual(published.length, 1, 'exactly one check run must be published on a refusal');
+    const payload = JSON.parse(published[0].body);
+    assert.strictEqual(payload.conclusion, 'failure',
+      'never `neutral` — GitHub counts neutral as PASSING on a Required check');
+    assert.ok(/store unavailable/i.test(payload.output.title), 'the title must name why');
+    // And it must have happened while no PR code could have run.
+    assert.ok(!restore.calls.some((c) => /\/comments/.test(c.url)), 'the refusal path posts no verdict comment');
+  } finally { restore(); fs.rmSync(repoPath, { recursive: true, force: true }); }
+});
+
+atest('a dry run refuses without publishing anything', async () => {
+  const restore = stubGitHubFor(
+    { gating: { enabled: true }, commands: { test: 'true' } },
+    { body: '## Acceptance criteria\n- [ ] POST /api/x returns 201\n' }
+  );
+  const repoPath = notAGitRepo();
+  try {
+    await assert.rejects(() => felixRun({
+      target: 'o/r#1', repoPath, dryRun: true, post: false, env: { GITHUB_TOKEN: 't' },
+    }), /unproven/);
+    assert.ok(!restore.calls.some((c) => c.method === 'POST'), 'a dry run writes nothing to GitHub');
+  } finally { restore(); fs.rmSync(repoPath, { recursive: true, force: true }); }
+});
+
+test('the freeze and the cap are conditions on the judge CALL, not filters on its result', () => {
+  const base = { spec: okSpec(), installFailed: false, fork: false, specDrift: { changed: false }, attempts: { exhausted: false } };
+  assert.strictEqual(shouldRunJudge(base), true, 'an ordinary gradeable run still reaches the judge');
+  // Each of these must independently stop the spend. A drifted rubric that is still graded costs
+  // a real judge call on criteria Felix already refused; an exhausted PR that is still graded
+  // keeps charging a budget that is gone, which is not a cap.
+  assert.strictEqual(shouldRunJudge({ ...base, specDrift: { changed: true } }), false);
+  assert.strictEqual(shouldRunJudge({ ...base, attempts: { exhausted: true } }), false);
+  // The pre-existing clauses, pinned in the same place so a future edit cannot quietly drop one.
+  assert.strictEqual(shouldRunJudge({ ...base, fork: true }), false);
+  assert.strictEqual(shouldRunJudge({ ...base, installFailed: true }), false);
+  assert.strictEqual(shouldRunJudge({ ...base, spec: okSpec({ hadRealSpec: false }) }), false);
+  assert.strictEqual(shouldRunJudge({ ...base, spec: okSpec({ size: { overLimit: true } }) }), false);
+  assert.strictEqual(shouldRunJudge({ ...base, spec: null }), false);
+  // Absent (not merely false) drift/attempts must not be read as "blocked".
+  assert.strictEqual(shouldRunJudge({ spec: okSpec(), installFailed: false, fork: false }), true);
+});
+
+test('run() actually HANDS the freeze and the cap to compose and to the verdict log', () => {
+  // The dead-code guard, and the reason this whole task existed: both causes shipped once with
+  // compose() accepting `specDrift`/`attempts` that no caller passed. A structural check, stated
+  // as one — the behavioural path needs a live sandbox and a live store — but it fails loudly if
+  // either value stops being wired, which is the failure mode that actually happened.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'engine', 'index.js'), 'utf8');
+  const composeCall = src.slice(src.indexOf('const verdictObj = compose({ triage, spec'));
+  const args = composeCall.slice(0, composeCall.indexOf('});'));
+  assert.ok(/\bspecDrift\b/.test(args), 'compose() must receive specDrift or spec_changed can never fire');
+  assert.ok(/\battempts\b/.test(args), 'compose() must receive attempts or attempts_exhausted can never fire');
+  // And the row the NEXT run reads must carry the pin, through the shared helper.
+  assert.ok(/spec_fingerprint:\s*pinnableFingerprint\(spec\)/.test(src),
+    'the logged fingerprint must come from the same helper the comparison used');
+  assert.ok(/await fetchPriorRuns\(/.test(src), 'both controls read from the durable store');
+});
+
+test('finalize logs the verdict BEFORE it publishes the check run', () => {
+  // A structural guard, and labelled as one: the behavioural path needs a live Supabase, so this
+  // pins the ORDER in source. It is not decoration — the attempt cap rests on it. `judge_attempted`
+  // is what the next run counts, so any green an attacker can harvest must already have charged
+  // the budget. Publish first and a run that dies in between leaves a passing check with its
+  // judge roll unrecorded: free re-rolls, which is exactly what the cap exists to stop.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'engine', 'index.js'), 'utf8');
+  const body = src.slice(src.indexOf('async function finalize('));
+  const logAt = body.indexOf('await logVerdict(');
+  const checkAt = body.indexOf('await gh.createCheckRun(');
+  assert.ok(logAt > 0, 'finalize must await logVerdict');
+  assert.ok(checkAt > 0, 'finalize must await createCheckRun');
+  assert.ok(logAt < checkAt, 'logVerdict must be awaited before the check run is created');
+});
+
+atest('the same run under ADVISORY gating proceeds past the freeze check', async () => {
+  // The differential half. If the refusal were unconditional, this would fail with the same
+  // message; instead it gets as far as createSandbox and dies on the missing git repo — which
+  // also re-proves the ordering (step 4b is before the sandbox, so no worktree of PR content
+  // is ever created when it refuses).
+  const restore = stubGitHubFor(
+    { commands: { test: 'true' } },
+    { body: '## Acceptance criteria\n- [ ] POST /api/x returns 201\n' }
+  );
+  const repoPath = notAGitRepo();
+  try {
+    await assert.rejects(
+      () => felixRun({ target: 'o/r#1', repoPath, dryRun: true, post: false, env: { GITHUB_TOKEN: 't' } }),
+      (e) => !/unproven/.test(e.message),
+      'advisory mode must warn and proceed, not refuse'
+    );
+  } finally { restore(); fs.rmSync(repoPath, { recursive: true, force: true }); }
+});
+
+// ── What the reader sees ─────────────────────────────────────────────────────────────────────
+
+console.log('freeze rendering (comment.js)');
+
+test('a run that never reached the freeze renders nothing about it', () => {
+  // Drafts and triage-skipped runs. A reassuring "frozen" line for a check that never ran would
+  // be worse than silence.
+  assert.deepStrictEqual(renderFreeze(undefined), []);
+  assert.deepStrictEqual(renderFreeze(null), []);
+});
+
+test('an unenforced freeze says so out loud instead of going quiet', () => {
+  const out = renderFreeze({ available: false, pinned: 'abc', attempts: { used: 0, limit: 10 } }).join('\n');
+  assert.ok(/not enforced/i.test(out), 'a missing line reads as "nothing to report"');
+  assert.ok(!/judge run/i.test(out), 'no attempt count can be claimed when the store did not answer');
+});
+
+test('drift is rendered with both fingerprints so a human can see what moved', () => {
+  const out = renderFreeze({
+    available: true, pinned: 'bbbb2222beef99', attempts: { used: 1, limit: 10 },
+    drift: { changed: true, baseline: 'aaaa1111cafe77', current: 'bbbb2222beef99' },
+  }).join('\n');
+  assert.ok(out.includes('aaaa1111cafe') && out.includes('bbbb2222beef'), 'show both sides');
+  assert.ok(/CHANGED/.test(out));
+});
+
+test('a held pin and a first pin read differently', () => {
+  const held = renderFreeze({ available: true, pinned: 'aaaa1111cafe77', drift: { changed: false, baseline: 'aaaa1111cafe77' }, attempts: { used: 2, limit: 10 } }).join('\n');
+  const first = renderFreeze({ available: true, pinned: 'aaaa1111cafe77', drift: { changed: false, baseline: null }, attempts: { used: 0, limit: 10 } }).join('\n');
+  assert.ok(/frozen/.test(held) && /unchanged/.test(held));
+  assert.ok(/first graded/.test(first));
+  assert.notStrictEqual(held, first);
+});
+
+test('the judge budget is rendered as run k of N, counting this run', () => {
+  const mid = renderFreeze({ available: true, pinned: 'aa', attempts: { used: 3, limit: 10, exhausted: false }, attempted: true, drift: { changed: false, baseline: 'aa' } }).join('\n');
+  assert.ok(mid.includes('judge run 4 of 10'), `used=3 + this run = 4; got: ${mid}`);
+  const skipped = renderFreeze({ available: true, pinned: 'aa', attempts: { used: 3, limit: 10, exhausted: false }, attempted: false, drift: { changed: false, baseline: 'aa' } }).join('\n');
+  assert.ok(/not run/.test(skipped) && skipped.includes('3 of 10'), 'a run that rolled no dice must not claim an attempt');
+  const done = renderFreeze({ available: true, pinned: 'aa', attempts: { used: 10, limit: 10, exhausted: true }, attempted: false, drift: { changed: false, baseline: 'aa' } }).join('\n');
+  assert.ok(/exhausted/.test(done) && done.includes('10 of 10'));
+});
+
+test('every freeze state pairs its icon with a word — never colour or glyph alone', () => {
+  const states = [
+    { available: false },
+    { available: true, pinned: 'aa', drift: { changed: true, baseline: 'bb', current: 'aa' }, attempts: { used: 1, limit: 10 } },
+    { available: true, pinned: 'aa', drift: { changed: false, baseline: 'aa' }, attempts: { used: 1, limit: 10 }, attempted: true },
+    { available: true, pinned: 'aa', drift: { changed: false, baseline: null }, attempts: { used: 0, limit: 10, exhausted: false } },
+    { available: true, pinned: null, drift: { changed: false }, attempts: { used: 10, limit: 10, exhausted: true } },
+  ];
+  // The state each line reports must survive deleting every icon. Matched against a fixed
+  // vocabulary rather than a word count, because "✅ 4 of 10" would pass a word count while
+  // carrying its whole meaning in the tick.
+  const STATE_WORD = /not enforced|CHANGED|frozen|pinned|none|exhausted|judge run|judge not run/;
+  for (const s of states) {
+    for (const line of renderFreeze(s).filter(Boolean)) {
+      const deIconed = line.replace(/[^\x00-\x7F]/g, '').replace(/\*\*[^*]+:\*\*/, '').trim();
+      assert.ok(STATE_WORD.test(deIconed),
+        `a colour-blind reader must get the state in words, icons removed: "${deIconed}"`);
+      assert.ok(deIconed.split(/\s+/).filter((w) => /[a-z]{3}/i.test(w)).length >= 2,
+        `not enough words left after removing icons: "${deIconed}"`);
+    }
+  }
+});
+
+test('the freeze block lands in the rendered comment, under the criteria it qualifies', () => {
+  const body = render({
+    verdict: 'NOT VERIFIED', spec: { source: 'PR description', total: 2, mappedCount: 1 },
+    tier1: [], tier3: null, required_to_pass: [], meta: { version: '1.0.0' },
+    freeze: { available: true, pinned: 'aaaa1111cafe77', drift: { changed: true, baseline: 'bbbb2222beef99', current: 'aaaa1111cafe77' }, attempts: { used: 2, limit: 10 } },
+  });
+  assert.ok(body.includes('Spec pin:'), 'the fingerprint must reach the PR comment, not just the log');
+  assert.ok(body.indexOf('**Spec:**') < body.indexOf('Spec pin:'), 'the pin qualifies the criteria above it');
+  // A run with no freeze state renders exactly as before.
+  const plain = render({
+    verdict: 'SKIPPED', spec: null, tier1: [], tier3: null, required_to_pass: [], meta: { version: '1.0.0' },
+  });
+  assert.ok(!plain.includes('Spec pin:'));
+});
+
+// ── The pull_request:edited sentinel ─────────────────────────────────────────────────────────
+
+console.log('spec pin sentinel (sentinel.js)');
+
+const { decide: sentinelDecide, CHECK_NAME } = require('../src/engine/sentinel');
+const sentinelGating = { enabled: true, blockOn: ['NOT VERIFIED'], overrideLabel: 'felix-override' };
+const upStore = (baselineFingerprint) => ({ available: true, baselineFingerprint, judgeAttempts: 0, reason: null });
+
+test('the sentinel writes its OWN check, never the verdict check', () => {
+  // Sharing the name would let the sentinel overwrite a verdict it did not make, and would leave
+  // a reverted PR stuck red — after a revert there is no drift, so nothing would be written.
+  assert.strictEqual(CHECK_NAME, 'Felix spec pin');
+  assert.notStrictEqual(CHECK_NAME, 'Felix verdict');
+});
+
+test('criteria that moved after grading fail the pin check', () => {
+  const r = sentinelDecide({ current: 'bbbb2222beef99', prior: upStore('aaaa1111cafe77'), gating: sentinelGating, labels: [] });
+  assert.strictEqual(r.state, 'changed');
+  assert.strictEqual(r.conclusion, 'failure', 'never neutral — GitHub counts neutral as passing');
+  assert.ok(r.summary.includes('aaaa1111cafe') && r.summary.includes('bbbb2222beef'), 'show both hashes');
+  assert.ok(/restore the previous criteria/i.test(r.summary), 'the free relief valve comes first');
+  assert.ok(r.summary.includes('felix-override'), 'and it names the configured maintainer label');
+});
+
+test('an unchanged pin passes, and so does a PR nothing has graded yet', () => {
+  const held = sentinelDecide({ current: 'aaaa1111cafe77', prior: upStore('aaaa1111cafe77'), gating: sentinelGating, labels: [] });
+  assert.strictEqual(held.state, 'held');
+  assert.strictEqual(held.conclusion, 'success');
+  const first = sentinelDecide({ current: 'aaaa1111cafe77', prior: upStore(null), gating: sentinelGating, labels: [] });
+  assert.strictEqual(first.state, 'first');
+  assert.strictEqual(first.conclusion, 'success', 'nothing pinned yet is not a violation');
+});
+
+test('restoring the criteria clears the check with no push and no human', () => {
+  // The whole reason the sentinel does not share the verdict check's name: this transition has to
+  // be able to go back to green on its own.
+  const drifted = sentinelDecide({ current: 'bbbb2222beef99', prior: upStore('aaaa1111cafe77'), gating: sentinelGating, labels: [] });
+  const restored = sentinelDecide({ current: 'aaaa1111cafe77', prior: upStore('aaaa1111cafe77'), gating: sentinelGating, labels: [] });
+  assert.strictEqual(drifted.conclusion, 'failure');
+  assert.strictEqual(restored.conclusion, 'success');
+});
+
+test('a PR with nothing gradeable passes the pin check instead of reporting the same fault twice', () => {
+  const r = sentinelDecide({ current: null, prior: upStore(null), gating: sentinelGating, labels: [] });
+  assert.strictEqual(r.state, 'unpinnable');
+  assert.strictEqual(r.conclusion, 'success', 'no_spec is the verdict check\'s job; a second red trains people to ignore this one');
+});
+
+test('the sentinel fails closed on a down store under gating, and mirrors the pipeline exactly', () => {
+  const down = { available: false, baselineFingerprint: null, judgeAttempts: 0, reason: 'connection refused' };
+  const gated = sentinelDecide({ current: 'aaaa1111cafe77', prior: down, gating: sentinelGating, labels: [] });
+  assert.strictEqual(gated.conclusion, 'failure');
+  assert.ok(gated.summary.includes('connection refused'));
+  // Advisory: reported, not blocking. Same predicate, same answer as index.js.
+  const advisory = sentinelDecide({ current: 'aaaa1111cafe77', prior: down, gating: { enabled: false }, labels: [] });
+  assert.strictEqual(advisory.conclusion, 'neutral');
+  assert.ok(/not enforced/i.test(advisory.title));
+  // And the same escape hatch.
+  const overridden = sentinelDecide({ current: 'aaaa1111cafe77', prior: down, gating: sentinelGating, labels: ['felix-override'] });
+  assert.strictEqual(overridden.conclusion, 'neutral');
+  // Nothing to protect ⇒ no refusal, exactly as in the pipeline.
+  assert.strictEqual(sentinelDecide({ current: null, prior: down, gating: sentinelGating, labels: [] }).conclusion, 'neutral');
+});
+
+test('every sentinel state carries its meaning in words, not only in an icon', () => {
+  const cases = [
+    { current: 'aa', prior: upStore('bb') }, { current: 'aa', prior: upStore('aa') },
+    { current: 'aa', prior: upStore(null) }, { current: null, prior: upStore(null) },
+    { current: 'aa', prior: { available: false, baselineFingerprint: null, judgeAttempts: 0, reason: 'x' } },
+  ];
+  for (const c of cases) {
+    const r = sentinelDecide({ ...c, gating: sentinelGating, labels: [] });
+    const deIconed = r.title.replace(/[^\x00-\x7F]/g, '').trim();
+    assert.ok(/[a-z]{3}/i.test(deIconed) && deIconed.split(/\s+/).length >= 3,
+      `a colour-blind reader must get the state from the title: "${deIconed}"`);
+  }
+});
+
+test('the sentinel hashes the same set the pipeline does, without fetching the changed files', () => {
+  // This is what lets the sentinel skip getFiles entirely, so it is asserted rather than assumed.
+  // buildSpec uses the file list ONLY to compute mappedFiles, and specFingerprint hashes
+  // mapped[].text — which file mapping never touches.
+  const pr = { title: 'x', body: '## Acceptance criteria\n- [ ] POST /api/spec returns 201\n- [ ] it logs the id\n' };
+  const issues = [{ number: 7, body: '## Requirements\n- [ ] the widget renders on mobile\n' }];
+  const withFiles = buildSpec(pr, issues, [
+    { filename: 'src/spec/handler.js' }, { filename: 'src/widget.js' }, { filename: 'test/id.test.js' },
+  ]);
+  const withoutFiles = buildSpec(pr, issues, []);
+  assert.strictEqual(withoutFiles.fingerprint, withFiles.fingerprint,
+    'the sentinel would compare a different hash to the pipeline and flag drift on every edit');
+  assert.ok(withFiles.mappedCount > 0 && withoutFiles.mappedCount === 0,
+    'the mapping really does differ — so this is a claim about the FINGERPRINT, not about buildSpec being inert');
+  assert.strictEqual(withoutFiles.hadRealSpec, withFiles.hadRealSpec, 'and pinnability agrees too');
+});
+
 test('an honest monorepo spec keeps real headroom', () => {
   // 10 linked issues x 20 criteria x ~100 chars, far past anything Felix's own PRs carry. The
   // 60% assertion means lowering the fraction fails HERE rather than failing a contributor.
@@ -3591,6 +4216,386 @@ test('a repo on a smaller seat gets a smaller cap, not one sized for a seat it l
   assert.ok(criteriaCapChars(lowered) < CRITERIA_CAP,
     'honoring the override is what keeps the cap honest on a small rate-limit tier');
   assert.strictEqual(promptBudgetTokens({}, PROVIDERS), SMALL_SEAT);
+});
+
+console.log('preflight — the local, PR-less mode');
+
+// A fake exec that answers `git <thing>` from a table. Keeps every decision below testable
+// without a fixture repo, which is what lets these run in the same second as the rest.
+function fakeGit(table) {
+  return (cmd) => {
+    for (const [match, out] of table) {
+      if (cmd.includes(match)) {
+        return Promise.resolve(out === null
+          ? { code: 1, stdout: '', stderr: '', combined: 'fatal', timedOut: false }
+          : { code: 0, stdout: out, stderr: '', combined: out, timedOut: false });
+      }
+    }
+    return Promise.resolve({ code: 1, stdout: '', stderr: '', combined: 'no match', timedOut: false });
+  };
+}
+
+test('only criteria_unmet and install_failed are retryable by a loop', () => {
+  assert.deepStrictEqual([...RETRYABLE_CAUSES].sort(), [CAUSES.CRITERIA_UNMET, CAUSES.INSTALL_FAILED].sort());
+});
+
+test('no_spec and spec_too_large are TERMINAL — the hard line', () => {
+  // If a loop can retry these, the only way to "pass" is to author or trim the rubric, and a
+  // verifier grading a spec written by the thing it is grading is decorative. Not configurable.
+  assert.ok(!RETRYABLE_CAUSES.includes(CAUSES.NO_SPEC), 'a loop must never be able to author the rubric');
+  assert.ok(!RETRYABLE_CAUSES.includes(CAUSES.SPEC_TOO_LARGE), 'a loop must never be able to trim the rubric');
+  assert.ok(!RETRYABLE_CAUSES.includes(CAUSES.SPEC_CHANGED));
+  assert.ok(!RETRYABLE_CAUSES.includes(CAUSES.ATTEMPTS_EXHAUSTED));
+  assert.ok(!RETRYABLE_CAUSES.includes(CAUSES.JUDGE_ERROR));
+});
+
+test('an EMPTY changed-file list is not SKIPPED — absence of data is not evidence of nothing', () => {
+  // `files.length > 0 &&` is the clause under test. A getFiles that returned [] because the API
+  // hiccuped, or a local diff that came back empty because the base ref was wrong, must not
+  // present as "only non-behavioral files changed" — that verdict is SKIPPED, which GitHub
+  // counts as passing. Surfaced by a mutation run: nothing pinned this before.
+  assert.strictEqual(triageFiles([], DEFAULT_SKIP_GLOBS).skipped, false);
+  assert.strictEqual(triageFiles([{ filename: 'README.md' }], DEFAULT_SKIP_GLOBS).skipped, true);
+});
+
+test('parseNameStatus produces GitHub-shaped file objects, renames included', () => {
+  const files = parseNameStatus(
+    'M\tsrc/a.js\nA\tsrc/b.js\nD\tsrc/gone.js\nR096\tsrc/old.js\tsrc/new.js\nC100\tsrc/x.js\tsrc/copy.js'
+  );
+  assert.deepStrictEqual(files.map((f) => `${f.status}:${f.filename}`), [
+    'modified:src/a.js', 'added:src/b.js', 'removed:src/gone.js', 'renamed:src/new.js', 'copied:src/copy.js',
+  ]);
+  // deps.js builds its rename map off previous_filename and silently maps nothing without it.
+  assert.strictEqual(files[3].previous_filename, 'src/old.js');
+  assert.strictEqual(files[4].previous_filename, 'src/x.js');
+});
+
+test('attachPatches hangs each per-file patch off the post-change name', () => {
+  const diff = [
+    'diff --git a/src/a.js b/src/a.js',
+    '--- a/src/a.js',
+    '+++ b/src/a.js',
+    '@@ -1 +1 @@',
+    '-old',
+    '+new',
+    'diff --git a/src/old.js b/src/new.js',
+    'similarity index 96%',
+  ].join('\n');
+  const files = attachPatches(
+    [{ filename: 'src/a.js', status: 'modified' }, { filename: 'src/new.js', status: 'renamed' }],
+    diff
+  );
+  assert.match(files[0].patch, /^diff --git a\/src\/a\.js/);
+  assert.match(files[0].patch, /\+new/);
+  // The b-side, not the a-side: a rename's patch belongs to the file that now exists.
+  assert.match(files[1].patch, /similarity index/);
+});
+
+test('judgeGuard refuses a second grading of an identical tree', () => {
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  fs.writeFileSync(statePath, JSON.stringify({ day: '2026-08-09', count: 1, lastJudgedSha: 'abc123def456' }));
+  const g = judgeGuard({ repoRoot: d, sha: 'abc123def456', env: {}, deps: { statePath, today: '2026-08-09' } });
+  assert.strictEqual(g.allowed, false);
+  assert.match(g.reason, /identical to the last graded run/);
+});
+
+test('judgeGuard allows a changed tree, and charges before the call', () => {
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  fs.writeFileSync(statePath, JSON.stringify({ day: '2026-08-09', count: 3, lastJudgedSha: 'oldsha' }));
+  const g = judgeGuard({ repoRoot: d, sha: 'newsha', env: {}, deps: { statePath, today: '2026-08-09' } });
+  assert.strictEqual(g.allowed, true);
+  g.charge();
+  const after = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  assert.strictEqual(after.count, 4, 'the attempt is charged whether or not the call succeeds');
+  assert.strictEqual(after.lastJudgedSha, 'newsha');
+});
+
+test('judgeGuard enforces the daily cap, and the env can move it', () => {
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  fs.writeFileSync(statePath, JSON.stringify({ day: '2026-08-09', count: 20, lastJudgedSha: 'x' }));
+  const at = judgeGuard({ repoRoot: d, sha: 'y', env: {}, deps: { statePath, today: '2026-08-09' } });
+  assert.strictEqual(at.allowed, false);
+  assert.match(at.reason, /cap 20/);
+  const raised = judgeGuard({ repoRoot: d, sha: 'y', env: { FELIX_PREFLIGHT_JUDGE_CAP: '50' }, deps: { statePath, today: '2026-08-09' } });
+  assert.strictEqual(raised.allowed, true, 'the cap is advisory and says so — it must be movable');
+});
+
+test('judgeGuard resets the daily count but KEEPS the last graded sha', () => {
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  fs.writeFileSync(statePath, JSON.stringify({ day: '2026-08-08', count: 20, lastJudgedSha: 'samesha' }));
+  const next = judgeGuard({ repoRoot: d, sha: 'samesha', env: {}, deps: { statePath, today: '2026-08-09' } });
+  // A new day refills the budget; it does not make re-rolling an UNCHANGED tree informative.
+  assert.strictEqual(next.allowed, false);
+  assert.match(next.reason, /identical to the last graded run/);
+});
+
+test('judgeGuard treats a corrupt state file as a fresh counter', () => {
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  fs.writeFileSync(statePath, 'not json at all');
+  const g = judgeGuard({ repoRoot: d, sha: 'z', env: {}, deps: { statePath, today: '2026-08-09' } });
+  assert.strictEqual(g.allowed, true, 'it is advisory: a corrupt tripwire must not block the run');
+});
+
+// ── the loop session: the ceiling and the criteria pin ───────────────────────────────────────
+
+const loopDeps = (statePath, today = '2026-08-09') => ({ statePath, today });
+
+test('a session with no --loop counts nothing and writes nothing', () => {
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  const s = loopSession({ repoRoot: d, env: {}, opts: {}, deps: loopDeps(statePath) });
+  assert.strictEqual(s.enabled, false);
+  assert.strictEqual(s.attempt, 0);
+  // A plain `felix preflight` that pinned a fingerprint would make the HUMAN's run the baseline
+  // the agent's next loop is frozen against. It must be inert.
+  assert.deepStrictEqual(s.checkPin('abc'), { drifted: false, baseline: null, current: 'abc' });
+  s.close();
+  assert.strictEqual(fs.existsSync(statePath), false, 'an uncounted run leaves no trace');
+});
+
+test('the loop counts up on entry and refuses past the ceiling', () => {
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  const opts = { loop: true, maxAttempts: 3 };
+  for (let i = 1; i <= 3; i++) {
+    const s = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+    assert.strictEqual(s.attempt, i, `attempt ${i}`);
+    assert.strictEqual(s.exhausted, false);
+    // Charged on ENTRY: the count is durable before anything is graded, so a crashed attempt
+    // burns one rather than becoming a free retry.
+    assert.strictEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')).loop.attempt, i);
+  }
+  const over = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+  assert.strictEqual(over.exhausted, true);
+  assert.strictEqual(over.halted, 'attempts_exhausted');
+  assert.match(over.reason, /tripwire, not a wall/, 'it must state its own escape hatch');
+  assert.match(over.reason, /--reset-loop/);
+});
+
+test('the ceiling is movable, and 0 or garbage falls back to the default', () => {
+  const d = tmpdir();
+  const sp = (n) => path.join(d, `s${n}.json`);
+  const at = (opts, env = {}) => loopSession({ repoRoot: d, env, opts, deps: loopDeps(sp(Math.random())) }).limit;
+  assert.strictEqual(at({ loop: true }), DEFAULT_LOOP_MAX_ATTEMPTS);
+  assert.strictEqual(at({ loop: true, maxAttempts: '9' }), 9);
+  assert.strictEqual(at({ loop: true }, { FELIX_PREFLIGHT_LOOP_MAX: '7' }), 7);
+  // The FELIX_PREFLIGHT_JUDGE_CAP shape, on purpose: neither an accidental zero budget (which
+  // would refuse every honest loop) nor an accidental infinite one.
+  assert.strictEqual(at({ loop: true, maxAttempts: '0' }), DEFAULT_LOOP_MAX_ATTEMPTS);
+  assert.strictEqual(at({ loop: true, maxAttempts: 'lots' }), DEFAULT_LOOP_MAX_ATTEMPTS);
+  assert.strictEqual(at({ loop: true, maxAttempts: '-4' }), DEFAULT_LOOP_MAX_ATTEMPTS);
+});
+
+test('attempt 1 pins the criteria, and a later attempt that moves them HALTS', () => {
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  const opts = { loop: true };
+  const first = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+  assert.deepStrictEqual(first.checkPin('fp-one'), { drifted: false, baseline: null, current: 'fp-one' });
+  assert.strictEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')).loop.fingerprint, 'fp-one');
+
+  const same = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+  assert.strictEqual(same.checkPin('fp-one').drifted, false, 'an unchanged rubric is not drift');
+
+  const moved = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+  const pin = moved.checkPin('fp-two');
+  assert.strictEqual(pin.drifted, true);
+  assert.strictEqual(pin.baseline, 'fp-one');
+  assert.strictEqual(moved.halted, 'spec_changed');
+});
+
+test('DELETING every criterion is drift, not a fresh start', () => {
+  // specFingerprint returns null for an empty set. Without this, the cheapest cheat in the whole
+  // system — delete the criteria file the loop keeps failing — would read as `no_spec` (terminal,
+  // but the wrong finding) or, on attempt 1, as "nothing to pin".
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  const opts = { loop: true };
+  loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) }).checkPin('fp-one');
+  const gone = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+  const pin = gone.checkPin(null);
+  assert.strictEqual(pin.drifted, true);
+  assert.strictEqual(gone.halted, 'spec_changed');
+});
+
+test('a session that starts with NO criteria pins nothing, so criteria may legitimately appear', () => {
+  // Attempt 1 without criteria is no_spec and terminal on its own. Pinning the ABSENCE would then
+  // make writing the criteria — the correct response — look like drift.
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  const opts = { loop: true };
+  const first = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+  assert.strictEqual(first.checkPin(null).drifted, false);
+  assert.strictEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')).loop.fingerprint, null);
+  const next = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+  assert.strictEqual(next.checkPin('fp-one').drifted, false, 'criteria appearing is not drift');
+});
+
+test('--reset-loop and a new day both start a clean session; close() ends one', () => {
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  const opts = { loop: true, maxAttempts: 2 };
+  loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) }).checkPin('fp-one');
+  loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+  assert.strictEqual(loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) }).exhausted, true);
+
+  const reset = loopSession({ repoRoot: d, env: {}, opts: { ...opts, resetLoop: true }, deps: loopDeps(statePath) });
+  assert.strictEqual(reset.attempt, 1);
+  assert.strictEqual(reset.fingerprint, null, 'a reset drops the pin too, or the rubric stays frozen forever');
+
+  const tomorrow = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath, '2026-08-10') });
+  assert.strictEqual(tomorrow.attempt, 1, 'same rollover as the judge cap — one mental model for the file');
+
+  tomorrow.close();
+  const after = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath, '2026-08-10') });
+  assert.strictEqual(after.attempt, 1, 'VERIFIED ends the session, so the next loop is not half-spent');
+});
+
+test('a judged run does NOT erase the loop counter or the pin', () => {
+  // The bug this exists to stop: judgeGuard.charge() used to write {day,count,lastJudgedSha} whole.
+  // Sharing one state file means every judged iteration would have silently reset the ceiling and
+  // dropped the criteria pin — the two controls would evaporate exactly when spend was happening.
+  const d = tmpdir();
+  const statePath = path.join(d, 'state.json');
+  const opts = { loop: true, maxAttempts: 4 };
+  const s = loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+  s.checkPin('fp-one');
+
+  judgeGuard({ repoRoot: d, sha: 'treesha', env: {}, deps: { statePath, today: '2026-08-09' } }).charge();
+
+  const after = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  assert.strictEqual(after.count, 1, 'the judge counter still works');
+  assert.strictEqual(after.lastJudgedSha, 'treesha');
+  assert.strictEqual(after.loop.attempt, 1, 'and the loop counter survived it');
+  assert.strictEqual(after.loop.fingerprint, 'fp-one', 'and so did the pin');
+
+  // …and the reverse direction: charging a loop attempt must not drop the judge's unchanged-tree sha.
+  loopSession({ repoRoot: d, env: {}, opts, deps: loopDeps(statePath) });
+  const both = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  assert.strictEqual(both.lastJudgedSha, 'treesha');
+  assert.strictEqual(both.loop.attempt, 2);
+});
+
+test('loadCriteria reports absence rather than inventing an empty spec', () => {
+  const d = tmpdir();
+  const missing = loadCriteria({ repoRoot: d, criteriaPath: '.felix/nope.md' });
+  assert.strictEqual(missing.present, false);
+  assert.strictEqual(missing.body, '');
+  fs.mkdirSync(path.join(d, '.felix'), { recursive: true });
+  fs.writeFileSync(path.join(d, '.felix', 'c.md'), '## Acceptance criteria\n\n- [ ] it works well\n');
+  const found = loadCriteria({ repoRoot: d, criteriaPath: '.felix/c.md' });
+  assert.strictEqual(found.present, true);
+  assert.match(found.body, /it works well/);
+});
+
+test('a local criteria file and a PR body with the same bullets fingerprint identically', () => {
+  // The whole provenance story rests on this: pre-flight prints a hash the author compares to
+  // what CI pins from the PR description. If the two can never agree, the feature is theatre.
+  const body = '## Acceptance criteria\n\n- [ ] returns 201 on create\n- [ ] rejects a blank name\n';
+  const local = buildSpec({ title: '', body }, [], []);
+  const ci = buildSpec({ title: 'some PR title', body }, [], []);
+  assert.ok(local.fingerprint, 'a real criteria set must be pinnable');
+  assert.strictEqual(local.fingerprint, ci.fingerprint);
+  // …and weakening one bullet must move it, or drift would be invisible.
+  const weakened = buildSpec({ title: '', body: body.replace('rejects a blank name', 'handles names') }, [], []);
+  assert.notStrictEqual(weakened.fingerprint, local.fingerprint);
+});
+
+test('an empty title is passed to buildSpec so no_spec cannot launder into a gradeable spec', () => {
+  // buildSpec falls back to the PR title when it finds no criteria. Locally there is no title,
+  // and manufacturing one from a branch name would make a no_spec run look gradeable.
+  const spec = buildSpec({ title: '', body: 'no criteria in here at all' }, [], []);
+  assert.strictEqual(spec.hadRealSpec, false);
+  assert.strictEqual(spec.fingerprint, null);
+  assert.strictEqual(compose({ spec, tier1: [], tier3: null, judgeStatus: { configured: true } }).cause, CAUSES.NO_SPEC);
+});
+
+atest('resolveBaseRef prefers origin\'s declared default branch', async () => {
+  const deps = { run: fakeGit([['symbolic-ref', 'origin/develop'], ['rev-parse --verify --quiet origin/develop', 'origin/develop']]) };
+  const b = await resolveBaseRef({ repoRoot: '/x', env: {}, deps });
+  assert.strictEqual(b.ref, 'origin/develop');
+});
+
+atest('resolveBaseRef falls back to a LOCAL branch and says so', async () => {
+  const deps = { run: fakeGit([['symbolic-ref', null], ['rev-parse --verify --quiet main', 'main']]) };
+  const b = await resolveBaseRef({ repoRoot: '/x', env: {}, deps });
+  assert.strictEqual(b.ref, 'main');
+  assert.match(b.source, /no origin/i, 'the user must be told they are comparing against a local ref');
+});
+
+atest('resolveBaseRef returns no ref at all rather than inventing one', async () => {
+  const b = await resolveBaseRef({ repoRoot: '/x', env: {}, deps: { run: fakeGit([]) } });
+  assert.strictEqual(b.ref, null, 'inventing a base makes the diff wrong in a way nothing downstream can detect');
+});
+
+atest('an explicit --base that is not a ref throws instead of silently drifting', async () => {
+  await assert.rejects(
+    () => resolveBaseRef({ repoRoot: '/x', env: {}, explicit: 'nope', deps: { run: fakeGit([]) } }),
+    /not a ref/
+  );
+});
+
+atest('policy is read from the base ref when it is readable', async () => {
+  const warnings = [];
+  const raw = '{"skipGlobs":["**/*.md"]}';
+  const fetch = localBaseConfigFetcher({
+    repoRoot: tmpdir(), env: {}, baseRef: 'origin/main', warnings,
+    deps: { run: fakeGit([['rev-parse --verify --quiet origin/main', 'origin/main'], ['show origin/main:felix.config.json', raw]]) },
+  });
+  const got = await fetch();
+  assert.strictEqual(got.present, true);
+  assert.strictEqual(got.raw, raw);
+  assert.strictEqual(warnings.length, 0);
+});
+
+atest('an unreadable base ref falls back to the working tree LOUDLY, and does not throw', async () => {
+  // The CI fetcher throws here, deliberately. Locally that would be theatre — the agent owns
+  // every ref — and it would break the offline / no-remote case for nothing.
+  const d = tmpdir();
+  fs.writeFileSync(path.join(d, 'felix.config.json'), '{"skipGlobs":[]}');
+  const warnings = [];
+  const fetch = localBaseConfigFetcher({ repoRoot: d, env: {}, baseRef: 'origin/main', warnings, deps: { run: fakeGit([]) } });
+  const got = await fetch();
+  assert.strictEqual(got.present, true);
+  assert.strictEqual(got.ref, 'your working tree');
+  assert.strictEqual(warnings.length, 1);
+  assert.match(warnings[0], /POLICY FALLBACK/);
+  assert.match(warnings[0], /may judge differently/);
+});
+
+atest('a config present at base but absent locally is not mistaken for an unreadable ref', async () => {
+  const warnings = [];
+  const fetch = localBaseConfigFetcher({
+    repoRoot: tmpdir(), env: {}, baseRef: 'origin/main', warnings,
+    deps: { run: fakeGit([['rev-parse --verify --quiet origin/main', 'origin/main'], ['show origin/main:felix.config.json', null]]) },
+  });
+  const got = await fetch();
+  assert.strictEqual(got.present, false);
+  assert.strictEqual(got.ref, 'origin/main');
+  assert.strictEqual(warnings.length, 0, 'a repo with no config at base is healthy, not degraded');
+});
+
+atest('POLICY DRIFT names the keys that actually differ', async () => {
+  const d = tmpdir();
+  fs.writeFileSync(path.join(d, 'felix.config.json'), '{"skipGlobs":["**"],"workdir":"."}');
+  const warnings = [];
+  const fetch = localBaseConfigFetcher({
+    repoRoot: d, env: {}, baseRef: 'origin/main', warnings,
+    deps: { run: fakeGit([
+      ['rev-parse --verify --quiet origin/main', 'origin/main'],
+      ['show origin/main:felix.config.json', '{"skipGlobs":["**/*.md"],"workdir":"."}'],
+    ]) },
+  });
+  const got = await fetch();
+  assert.strictEqual(got.raw, '{"skipGlobs":["**/*.md"],"workdir":"."}', 'the BASE version is what CI will use');
+  assert.match(warnings[0], /POLICY DRIFT/);
+  assert.match(warnings[0], /skipGlobs/);
+  assert.ok(!/workdir/.test(warnings[0]), 'only the differing keys, or the warning is noise');
 });
 
 // Run the deferred async tests (judge wire-contract) after the sync suite, then tally.

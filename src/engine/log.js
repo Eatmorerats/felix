@@ -44,6 +44,59 @@ async function logVerdict(row, env = process.env) {
   }
 }
 
+/**
+ * Read the prior-run state one PR's freeze and attempt cap depend on.
+ *
+ * THIS READ IS NOT BEST-EFFORT THE WAY logVerdict IS, and the difference is the whole reason
+ * it lives in its own function. `logVerdict` may fail silently because a lost log costs a row
+ * of history. A lost READ costs the security property: if Felix cannot tell what criteria it
+ * pinned or how many times it has already graded this PR, then "the spec did not change" and
+ * "this PR has attempts left" are both unproven, and returning them as true would be a
+ * fail-open on the two controls that exist precisely because the author can edit the rubric
+ * and the judge is stochastic.
+ *
+ * So this reports `available` separately from its data, and never conflates "the store says
+ * there are no prior runs" (available: true, nothing pinned — a legitimate first run) with
+ * "the store did not answer" (available: false). index.js decides what to do with the
+ * difference: advisory mode warns and proceeds, gating mode refuses. That call belongs to the
+ * caller because only it knows whether a verdict here can block a merge.
+ *
+ * @returns {{available:boolean, baselineFingerprint:string|null, judgeAttempts:number, reason:string|null}}
+ */
+async function fetchPriorRuns({ repo, prNumber }, env = process.env) {
+  const unavailable = (reason) => ({ available: false, baselineFingerprint: null, judgeAttempts: 0, reason });
+  const supabase = client(env);
+  if (!supabase) return unavailable('Supabase is not configured');
+  try {
+    const { data, error } = await supabase
+      .from('felix_verdicts')
+      .select('spec_fingerprint, judge_attempted, created_at')
+      .eq('repo', repo)
+      .eq('pr_number', prNumber)
+      .order('created_at', { ascending: true });
+    if (error) {
+      logger.warn(`fetchPriorRuns failed: ${error.message}`);
+      return unavailable(error.message);
+    }
+    const rows = data || [];
+    // EARLIEST non-null wins. The baseline is the criteria set of the first run that actually
+    // graded something; later rows carry later fingerprints, and taking one of those would let
+    // a drifted spec re-pin itself simply by being logged.
+    const first = rows.find((r) => r && r.spec_fingerprint);
+    return {
+      available: true,
+      baselineFingerprint: first ? first.spec_fingerprint : null,
+      // Counts ATTEMPTS, not runs: a run that skipped the judge (triage, no spec, fork) costs
+      // no roll of the dice and must not consume budget.
+      judgeAttempts: rows.filter((r) => r && r.judge_attempted).length,
+      reason: null,
+    };
+  } catch (e) {
+    logger.warn(`fetchPriorRuns error: ${e.message}`);
+    return unavailable(e.message);
+  }
+}
+
 /** Record the post-merge outcome (clean | defect) on a PR's verdict rows. */
 async function recordOutcome({ repo, prNumber, outcome }, env = process.env) {
   const supabase = client(env);
@@ -92,4 +145,4 @@ async function fetchVerdicts({ repo } = {}, env = process.env) {
   }
 }
 
-module.exports = { logVerdict, recordOutcome, fetchVerdicts };
+module.exports = { logVerdict, recordOutcome, fetchVerdicts, fetchPriorRuns };

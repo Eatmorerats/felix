@@ -57,6 +57,14 @@ jobs:
       - name: test
         run: npm test
 
+      # The sentinel runs from `pull_request_target`, which carries the base repo's secrets and a
+      # writable token. That is only defensible because it never fetches or executes anything from
+      # the pull request — a claim about RESTRAINT, which a unit test cannot make. This drives the
+      # real entry point against a stubbed fetch and asserts the request log: no changed-files
+      # call, no diff, no judge vendor, and one check run under its own name.
+      - name: smoke — the spec pin sentinel touches nothing from the PR
+        run: npm run test:sentinel
+
   # The unit suite builds the docker command string and asserts its shape; it cannot tell you
   # whether that string actually runs, because the dev box this was written on has no docker.
   # The bug this guards — a read-only HOME making `npm ci` impossible inside the jail — lived

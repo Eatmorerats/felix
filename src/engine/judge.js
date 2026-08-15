@@ -121,6 +121,10 @@ function createJudge(env = process.env, { adversarial = false, fetchImpl, sleepI
   const budgetOverride = Number(env.FELIX_JUDGE_MAX_PROMPT_TOKENS) > 0
     ? Number(env.FELIX_JUDGE_MAX_PROMPT_TOKENS)
     : null;
+  // Requests-per-minute, opt-in. Same reasoning as the token budget above — it describes THIS
+  // ACCOUNT's tier, not the vendor — except no family ships a default, because none was measured
+  // to bind. A free-tier Gemini key is the case this exists for. See budget.js `paceMs`.
+  const rpmOverride = Number(env.FELIX_JUDGE_RPM) > 0 ? Number(env.FELIX_JUDGE_RPM) : null;
 
   // The budget the UNTRUSTED prompt regions are sized against — one value for every seat, not
   // each seat's own. A jury only means something if its vendors graded the same evidence, so a
@@ -143,9 +147,10 @@ function createJudge(env = process.env, { adversarial = false, fetchImpl, sleepI
     // A repo on a higher (or lower) rate-limit tier can override the per-seat budget rather
     // than editing the registry. Applies to every seat: it describes THIS ACCOUNT's ceiling,
     // which is a property of the billing plan, not of the vendor.
-    const provider = budgetOverride
+    let provider = budgetOverride
       ? { ...rawProvider, maxPromptTokens: budgetOverride, tpm: budgetOverride }
       : rawProvider;
+    if (rpmOverride) provider = { ...provider, rpm: rpmOverride };
     return { family, provider, model };
   });
 
@@ -159,6 +164,27 @@ function createJudge(env = process.env, { adversarial = false, fetchImpl, sleepI
     active.push({ ...seat, apiKey });
   }
   if (!active.length) return null;
+
+  // The bench, as BUILT — what any caller that names the grader must cite.
+  //
+  // FELIX_JUDGE_FAMILY names the seats REQUESTED. A vendor with no key is skipped a few lines
+  // above with a warning, so the env string and the seats that actually voted can differ, and
+  // they differ in the one direction that flatters a result: a solo run reported as a 2-vendor
+  // jury overstates the grader, which makes any bound measured against it look stronger than it
+  // is. That happened — a variance run declared `openai,gemini` with no GEMINI_API_KEY and the
+  // report printed "measured against a 2-vendor JURY". `requested` and `skipped` are kept
+  // alongside `active` on purpose: the mismatch is the interesting part, and a shape that can
+  // only say who graded cannot show that a seat went missing.
+  const bench = Object.freeze({
+    requested: Object.freeze([...families]),
+    active: Object.freeze(active.map((s) => Object.freeze({ family: s.family, model: s.model }))),
+    skipped: Object.freeze(seats
+      .filter((s) => !active.some((a) => a.family === s.family))
+      .map((s) => Object.freeze({ family: s.family, reason: `${s.provider.apiKeyEnv} not set` }))),
+  });
+  // Non-writable so a caller cannot relabel the bench it was handed — the whole point is that
+  // the grader's identity comes from construction, not from whatever the caller believes.
+  const withBench = (fn) => Object.defineProperty(fn, 'seats', { value: bench, enumerable: true });
 
   // One call, with a bounded retry when the vendor says "come back later" rather than "your
   // request is wrong". Rate limits and transient 5xx both clear on their own; everything
@@ -253,7 +279,7 @@ function createJudge(env = process.env, { adversarial = false, fetchImpl, sleepI
       // Pace against the seat's per-minute ceiling BEFORE spending, not after failing. Chunks
       // run sequentially on one seat for this reason; separate vendors still run in parallel
       // because they draw on separate quotas.
-      if (i > 0) await doSleep(paceMs(estimateTokens(prompt), seat.provider.tpm));
+      if (i > 0) await doSleep(paceMs(estimateTokens(prompt), seat.provider.tpm, seat.provider.rpm));
       if (plan.chunks.length > 1) {
         logger.info(`${seat.family} judge: part ${i + 1}/${plan.chunks.length} (${plan.chunks[i].paths.length} file(s))`);
       }
@@ -304,21 +330,21 @@ function createJudge(env = process.env, { adversarial = false, fetchImpl, sleepI
   // A chunked result has already been reconciled (and carries `coverage`, which this must
   // not drop), so it passes through untouched.
   if (families.length === 1) {
-    return async function judge(input) {
+    return withBench(async function judge(input) {
       const seatResult = await runSeat(active[0], input);
       if (seatResult.chunked) return seatResult;
       return {
         ...seatResult,
         criteria: alignSingleRulings({ specCriteria: input.criteria || [], result: seatResult }),
       };
-    };
+    });
   }
 
   // Jury: every seated vendor votes in parallel. A vendor that errors (bad key, rate limit,
   // safety block) or was never keyed is recorded as a failure and the surviving seats still
   // produce a verdict — but flagged DEGRADED, so a jury of one can never quietly masquerade
   // as two-vendor agreement. Only an empty bench is a hard error.
-  return async function jury(input) {
+  return withBench(async function jury(input) {
     const settled = await Promise.allSettled(active.map((seat) => runSeat(seat, input)));
     const results = [];
     const failures = seats
@@ -336,7 +362,7 @@ function createJudge(env = process.env, { adversarial = false, fetchImpl, sleepI
       );
     }
     return mergeJuryResults({ specCriteria: input.criteria || [], results, failures, adversarial });
-  };
+  });
 }
 
 module.exports = {
