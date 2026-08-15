@@ -52,6 +52,11 @@ const PROVIDERS = {
     // budgeting against that is precisely the bug this replaced.
     tpm: 30_000,
     maxPromptTokens: 30_000,
+    // No `rpm`: measured 2026-08-14 with scripts/probe-vendor-rpm.js — 60 concurrent requests
+    // accepted in 2.77s (~1,300/min offered), zero 429s. The request ceiling is nowhere near
+    // anything Felix does; TPM is what binds this seat. Deliberately absent rather than set to a
+    // large guess, because a number here would read as measured on a key that never measured it.
+    // A lower-tier key sets FELIX_JUDGE_RPM.
     async call({ apiKey, model, prompt, fetch }) {
       const res = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -90,6 +95,12 @@ const PROVIDERS = {
     // is a 429, and the point of this module is to stop guessing high.
     tpm: 200_000,
     maxPromptTokens: 200_000,
+    // No `rpm`, same as openai and same date: 250 concurrent requests accepted in 19.2s
+    // (~780/min offered), zero 429s. ⚠️ That is a PAID key. A FREE-tier Gemini key is the opposite
+    // case — it meters requests hard (~10/min, and it answers with a 20s `retryDelay`), which is
+    // what makes a two-vendor variance run eat a 429 per roll. That user sets FELIX_JUDGE_RPM=10
+    // and gets paced instead of retried. Do not encode 10 here: it would slow every paid seat by
+    // 6s a call to fix a tier this key is not on.
     async call({ apiKey, model, prompt, fetch }) {
       // Key travels in the x-goog-api-key HEADER, never the URL query string — so it can't
       // leak through request logs, proxies, or referrers. (Gemini accepts ?key= too; we

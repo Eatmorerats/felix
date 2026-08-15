@@ -2091,6 +2091,61 @@ test('paceMs converts tokens spent into a share of the per-minute window', () =>
   assert.strictEqual(paceMs(1000, 0), 0);              // unknown tpm ⇒ don't stall
 });
 
+test('paceMs also honours a requests-per-minute ceiling, and takes the LARGER wait', () => {
+  // The gap this closes: a small prompt buys almost no token wait, so the tokens term alone lets a
+  // seat fire ~29 requests a minute while believing it is inside budget. A 10 RPM key 429s on the
+  // third one.
+  assert.strictEqual(paceMs(1000, 30_000, 10), 6000);   // 2s by tokens, 6s by requests ⇒ 6s
+  assert.strictEqual(paceMs(30_000, 30_000, 10), 60_000); // 60s by tokens dominates ⇒ 60s
+  // Clearing one ceiling and busting the other is still a 429, so it is max, never min or sum.
+  assert.strictEqual(paceMs(1000, 30_000, 1), 60_000);
+  // Opt-in: unset, zero and negative all mean "no request ceiling known", not "wait forever".
+  assert.strictEqual(paceMs(1000, 30_000), 2000);
+  assert.strictEqual(paceMs(1000, 30_000, 0), 2000);
+  assert.strictEqual(paceMs(1000, 30_000, -5), 2000);
+  // And with neither ceiling known it still must not stall.
+  assert.strictEqual(paceMs(1000, 0, 0), 0);
+});
+
+test('no shipped family hardcodes an rpm — the measured ones did not bind (2026-08-14)', () => {
+  // A number here would read as measured. Both keys cleared a concurrent burst with zero 429s
+  // (openai 60 in 2.8s, gemini 250 in 19.2s), so the honest registry entry is absence. A
+  // free-tier key sets FELIX_JUDGE_RPM instead — see scripts/probe-vendor-rpm.js.
+  for (const family of Object.keys(PROVIDERS)) {
+    assert.strictEqual(PROVIDERS[family].rpm, undefined, `${family} hardcodes an unmeasured rpm`);
+  }
+});
+
+atest('FELIX_JUDGE_RPM reaches the real call path — a low-tier key paces instead of retrying', async () => {
+  // Driven through the chunked path with a sleep spy, not by re-asserting paceMs: the arithmetic
+  // is already pinned above, and what was actually missing was the WIRING. A test that rebuilds a
+  // judge and then checks the helper would pass with the override going nowhere.
+  const body = { choices: [{ message: { content: JSON.stringify({ assessment: 'p', criteria: [{ text: 'c', verdict: 'not_shown' }] }) } }] };
+  const run = async (env) => {
+    const waits = [];
+    const ff = fakeFetch(body);
+    await createJudge(
+      { OPENAI_API_KEY: 'sk', FELIX_JUDGE_MAX_PROMPT_TOKENS: '1000', ...env },
+      { fetchImpl: ff, sleepImpl: async (ms) => { waits.push(ms); } },
+    )({ prTitle: 'p', criteria: [{ text: 'c' }], diff: bigDiff(8, 500), tier1: [] });
+    assert.ok(ff.calls.length > 1, 'the diff must chunk for there to be any pacing at all');
+    return waits;
+  };
+
+  // rpm 1 (a 60s floor), because forcing a chunked run also drops tpm to the same 1000 and its
+  // tokens term is already ~52s. The override has to be the LARGER term for the max() to be
+  // observable at all — picking a floor under it would pass whether or not it was wired.
+  const paced = await run({ FELIX_JUDGE_RPM: '1' });
+  assert.ok(paced.length, 'a chunked run must pace between requests');
+  assert.ok(paced.every((ms) => ms === 60_000), `every wait should be the 1 RPM floor, got ${paced}`);
+
+  // Control: the same run without the override is governed by the tokens term alone and waits
+  // strictly less — so the assertion above is about the override, not about pacing existing.
+  const unpaced = await run({});
+  assert.ok(unpaced.length && unpaced.every((ms) => ms < 60_000),
+    `without the override waits stay under the floor, got ${unpaced}`);
+});
+
 test('chunkVerdict reads the 3-valued verdict, and a stray boolean false means not_shown', () => {
   assert.strictEqual(chunkVerdict({ verdict: 'met' }), 'met');
   assert.strictEqual(chunkVerdict({ verdict: 'VIOLATED' }), 'violated');

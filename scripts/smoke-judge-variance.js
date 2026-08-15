@@ -449,7 +449,13 @@ async function main() {
   for (let i = 0; i < args.k; i++) {
     // Paced against the seat's per-minute ceiling, sequentially, using the same helper production
     // uses. k parallel calls would 429 on any real prompt and turn a measurement into a retry test.
-    if (i > 0 && !synthetic) await new Promise((r) => setTimeout(r, paceMs(promptTokens, provider.tpm)));
+    if (i > 0 && !synthetic) {
+      // Both ceilings, same helper production uses. `rpm` is unset for both shipped families
+      // (measured 2026-08-14 as not binding — see paceMs), so this is the tokens term today and
+      // picks up the requests term for free on a key that sets FELIX_JUDGE_RPM.
+      const rpm = Number(env.FELIX_JUDGE_RPM) > 0 ? Number(env.FELIX_JUDGE_RPM) : provider.rpm;
+      await new Promise((r) => setTimeout(r, paceMs(promptTokens, provider.tpm, rpm)));
+    }
     try {
       const tier3 = await judge(input);
       const v = compose({

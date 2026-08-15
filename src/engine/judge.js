@@ -121,6 +121,10 @@ function createJudge(env = process.env, { adversarial = false, fetchImpl, sleepI
   const budgetOverride = Number(env.FELIX_JUDGE_MAX_PROMPT_TOKENS) > 0
     ? Number(env.FELIX_JUDGE_MAX_PROMPT_TOKENS)
     : null;
+  // Requests-per-minute, opt-in. Same reasoning as the token budget above — it describes THIS
+  // ACCOUNT's tier, not the vendor — except no family ships a default, because none was measured
+  // to bind. A free-tier Gemini key is the case this exists for. See budget.js `paceMs`.
+  const rpmOverride = Number(env.FELIX_JUDGE_RPM) > 0 ? Number(env.FELIX_JUDGE_RPM) : null;
 
   // The budget the UNTRUSTED prompt regions are sized against — one value for every seat, not
   // each seat's own. A jury only means something if its vendors graded the same evidence, so a
@@ -143,9 +147,10 @@ function createJudge(env = process.env, { adversarial = false, fetchImpl, sleepI
     // A repo on a higher (or lower) rate-limit tier can override the per-seat budget rather
     // than editing the registry. Applies to every seat: it describes THIS ACCOUNT's ceiling,
     // which is a property of the billing plan, not of the vendor.
-    const provider = budgetOverride
+    let provider = budgetOverride
       ? { ...rawProvider, maxPromptTokens: budgetOverride, tpm: budgetOverride }
       : rawProvider;
+    if (rpmOverride) provider = { ...provider, rpm: rpmOverride };
     return { family, provider, model };
   });
 
@@ -274,7 +279,7 @@ function createJudge(env = process.env, { adversarial = false, fetchImpl, sleepI
       // Pace against the seat's per-minute ceiling BEFORE spending, not after failing. Chunks
       // run sequentially on one seat for this reason; separate vendors still run in parallel
       // because they draw on separate quotas.
-      if (i > 0) await doSleep(paceMs(estimateTokens(prompt), seat.provider.tpm));
+      if (i > 0) await doSleep(paceMs(estimateTokens(prompt), seat.provider.tpm, seat.provider.rpm));
       if (plan.chunks.length > 1) {
         logger.info(`${seat.family} judge: part ${i + 1}/${plan.chunks.length} (${plan.chunks[i].paths.length} file(s))`);
       }

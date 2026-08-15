@@ -250,16 +250,33 @@ function planJudgeCalls({ diff, overheadChars, maxPromptTokens, maxChunks = DEFA
 
 /**
  * How long to wait before the next call on the same seat, so a multi-chunk run stays under
- * the per-MINUTE ceiling.
+ * the per-MINUTE ceilings.
  *
  * This is the part a naive "just make the chunks smaller" fix misses: TPM is a RATE. Three
  * 25K-token chunks fired back-to-back is 75K tokens inside one minute and 429s just as hard
  * as a single 75K request. Spending `tokens` therefore buys the seat `tokens/TPM` of a
  * minute, and we wait that long before spending again.
+ *
+ * ── THE SECOND CEILING, AND WHY IT IS OPT-IN ────────────────────────────────────────────────
+ * Vendors meter REQUESTS per minute as well as tokens, and the tokens term is no control at all
+ * over that one: a 1,027-token judge prompt against a 30K TPM seat buys a 2.1s wait — about 29
+ * requests a minute — so a key whose real limit is 10 RPM 429s on the third call while the pacer
+ * believes it is well inside budget. `rpm` adds that term; the wait is the LARGER of the two,
+ * because clearing one ceiling and busting the other is still a 429.
+ *
+ * It is opt-in (unset ⇒ no term) because a request ceiling is a property of the KEY'S TIER, not
+ * of the vendor, and this repo does not ship numbers it has not measured. Measured 2026-08-14 with
+ * `scripts/probe-vendor-rpm.js` on the paid `*_VARIANCE` keys: **Gemini took 250 concurrent
+ * requests with zero 429s (19s wall, ~780/min offered); OpenAI took 60 in 2.8s (~1,300/min
+ * offered).** Neither ceiling binds anything Felix does, so both registry entries leave `rpm`
+ * unset and the term is inert — which is the honest state, not an oversight. A free-tier Gemini
+ * key is a different story (~10 RPM, a 20s `retryDelay` per call); that user sets
+ * `FELIX_JUDGE_RPM` and gets paced instead of retried.
  */
-function paceMs(tokensJustSpent, tpm) {
-  if (!tpm || tpm <= 0) return 0;
-  return Math.max(0, Math.ceil((tokensJustSpent / tpm) * 60_000));
+function paceMs(tokensJustSpent, tpm, rpm) {
+  const tokenWait = !tpm || tpm <= 0 ? 0 : Math.ceil((tokensJustSpent / tpm) * 60_000);
+  const requestWait = !rpm || rpm <= 0 ? 0 : Math.ceil(60_000 / rpm);
+  return Math.max(0, tokenWait, requestWait);
 }
 
 /** Characters a seat may actually spend on a prompt, after the safety factor. */
