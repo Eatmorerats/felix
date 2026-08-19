@@ -1,0 +1,58 @@
+# Felix — calibration (ground truth)
+#
+# Runs the labelled fixture corpus (test/calibration-fixtures.js) through Felix's REAL judge and
+# prints a confusion matrix — precision/recall + escaped defects. This is the "reading": proof of
+# whether the judge actually catches a bad PR, as opposed to whether the pipeline runs.
+#
+# Runs when the corpus/judge/verdict code changes (so the number is re-measured whenever the ground
+# truth moves), or on manual dispatch. It does NOT run on every PR — that would bill a judge call
+# per push for no new signal.
+#
+# ── WHY IT LIVES HERE NOW ────────────────────────────────────────────────────────────────────
+# It used to live in Eatmorerats/sampulse, pointed at a copy of Felix vendored into that repo. That
+# copy was frozen at 2026-08-07 and has been deleted, so the workflow could never fire again: its
+# path triggers watched files that nothing would ever change. Calibrating Felix's judge is Felix's
+# own business, and this is the only repo where the paths it watches actually move.
+#
+# ⚠️ NEEDS A SECRET. This repo has none set. Until OPENAI_API_KEY exists here the job will run and
+# fail at the judge call — which is why it is continue-on-error and prints the matrix either way,
+# but do not read a red run as a calibration result.
+
+name: Felix Calibrate
+
+on:
+  pull_request:
+    paths:
+      - 'test/calibration-fixtures.js'
+      - 'test/calibrate.js'
+      - 'src/engine/judge.js'
+      - 'src/engine/verdict.js'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: 'felix-calibrate-${{ github.ref }}'
+  cancel-in-progress: true
+
+jobs:
+  calibrate:
+    runs-on: ubuntu-latest
+    # An escaped-defect exit(1) is a real signal, not a reason to fail the PR; the confusion matrix
+    # is printed to the log either way.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install deps
+        run: npm ci || npm install
+
+      - name: Calibrate against known-good and known-bad fixtures
+        env:
+          OPENAI_API_KEY: '${{ secrets.OPENAI_API_KEY }}'
+        run: npm run calibrate
