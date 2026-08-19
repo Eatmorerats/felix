@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>Felix — Phase 1 Engine Plan</title>
+<style>
+  :root{
+    --bg:#0d1117; --bg2:#161b22; --bg3:#1c2333; --line:#283041;
+    --ink:#e6edf3; --mut:#9aa7b4; --dim:#6b7888;
+    --acc:#6ea8ff; --acc2:#8a7cff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --skip:#8b949e;
+    --radius:14px; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    line-height:1.6;font-size:16px;
+    padding:0 0 env(safe-area-inset-bottom);
+    -webkit-font-smoothing:antialiased;
+  }
+  header.hero{
+    padding:28px 20px calc(20px) ;background:
+      radial-gradient(120% 140% at 0% 0%, rgba(110,168,255,.16), transparent 55%),
+      radial-gradient(120% 140% at 100% 0%, rgba(138,124,255,.16), transparent 55%),
+      var(--bg2);
+    border-bottom:1px solid var(--line);
+    position:sticky;top:0;z-index:5;backdrop-filter:saturate(140%) blur(6px);
+  }
+  .hero h1{margin:0;font-size:26px;letter-spacing:-.4px;display:flex;align-items:center;gap:10px}
+  .dot{width:13px;height:13px;border-radius:50%;background:linear-gradient(135deg,var(--acc),var(--acc2));box-shadow:0 0 14px rgba(110,168,255,.7)}
+  .hero p{margin:8px 0 0;color:var(--mut);font-size:14px}
+  .hero .meta{margin-top:12px;display:flex;flex-wrap:wrap;gap:8px}
+  .chip{font-size:11.5px;color:var(--mut);background:var(--bg3);border:1px solid var(--line);padding:4px 10px;border-radius:999px;font-family:var(--mono)}
+  main{max-width:860px;margin:0 auto;padding:20px 16px 60px}
+  section{margin:26px 0;background:var(--bg2);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+  section>h2{margin:0;padding:15px 18px;font-size:17px;border-bottom:1px solid var(--line);
+    background:linear-gradient(90deg,rgba(110,168,255,.08),transparent);display:flex;align-items:center;gap:10px}
+  .num{font-family:var(--mono);font-size:12px;color:var(--acc);border:1px solid var(--line);border-radius:8px;padding:2px 7px;background:var(--bg)}
+  .body{padding:16px 18px}
+  p{margin:0 0 12px}
+  h3{font-size:15px;margin:18px 0 8px;color:var(--ink)}
+  h3:first-child{margin-top:0}
+  ul,ol{margin:0 0 12px;padding-left:22px}
+  li{margin:5px 0}
+  code{font-family:var(--mono);font-size:13px;background:var(--bg3);border:1px solid var(--line);border-radius:6px;padding:1px 6px;color:#cdd9e5;word-break:break-word}
+  pre{margin:0 0 12px;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:14px;overflow:auto;-webkit-overflow-scrolling:touch}
+  pre code{background:none;border:none;padding:0;font-size:12.5px;line-height:1.55;white-space:pre}
+  .mut{color:var(--mut)}
+  .lead{font-size:15px;color:var(--mut)}
+  .grid{display:grid;gap:10px}
+  .card{background:var(--bg3);border:1px solid var(--line);border-radius:12px;padding:13px 14px}
+  .card h4{margin:0 0 6px;font-size:14px;display:flex;align-items:center;gap:8px}
+  .card p{margin:0;font-size:13.5px;color:var(--mut)}
+  .tag{font-family:var(--mono);font-size:10.5px;padding:2px 7px;border-radius:6px;border:1px solid var(--line)}
+  .t-ok{color:var(--ok);border-color:rgba(63,185,80,.4);background:rgba(63,185,80,.1)}
+  .t-warn{color:var(--warn);border-color:rgba(210,153,34,.4);background:rgba(210,153,34,.1)}
+  .t-bad{color:var(--bad);border-color:rgba(248,81,73,.4);background:rgba(248,81,73,.1)}
+  .t-acc{color:var(--acc);border-color:rgba(110,168,255,.4);background:rgba(110,168,255,.1)}
+  .t-skip{color:var(--skip);border-color:rgba(139,148,158,.4);background:rgba(139,148,158,.12)}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;display:block;overflow-x:auto}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--mut);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px;white-space:nowrap}
+  td code{white-space:nowrap}
+  .pipe{display:flex;flex-direction:column;gap:0}
+  .step{display:flex;gap:12px;padding:11px 0;border-bottom:1px dashed var(--line)}
+  .step:last-child{border-bottom:none}
+  .step .ix{flex:0 0 30px;height:30px;border-radius:50%;background:var(--bg);border:1px solid var(--acc);color:var(--acc);
+    display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:13px;font-weight:600}
+  .step .txt{flex:1}
+  .step .txt b{font-size:14.5px}
+  .step .txt div{font-size:13px;color:var(--mut)}
+  details{border:1px solid var(--line);border-radius:10px;background:var(--bg3);margin:0 0 10px}
+  summary{cursor:pointer;padding:11px 14px;font-weight:600;font-size:14px;list-style:none;display:flex;align-items:center;gap:8px}
+  summary::-webkit-details-marker{display:none}
+  summary::after{content:"+";margin-left:auto;color:var(--acc);font-family:var(--mono)}
+  details[open] summary::after{content:"–"}
+  details .dc{padding:0 14px 12px}
+  .callout{border-left:3px solid var(--acc);background:rgba(110,168,255,.07);padding:12px 14px;border-radius:0 10px 10px 0;margin:0 0 12px;font-size:14px}
+  .callout.warn{border-color:var(--warn);background:rgba(210,153,34,.08)}
+  .callout.bad{border-color:var(--bad);background:rgba(248,81,73,.08)}
+  footer{max-width:860px;margin:0 auto;padding:24px 18px 50px;color:var(--dim);font-size:12.5px;border-top:1px solid var(--line)}
+  a{color:var(--acc)}
+  @media (max-width:520px){
+    .hero h1{font-size:22px}
+    body{font-size:15.5px}
+  }
+  @media (min-width:620px){ .grid.two{grid-template-columns:1fr 1fr} }
+</style>
+</head>
+<body>
+<header class="hero">
+  <h1><span class="dot"></span>Felix — Phase 1 Plan</h1>
+  <p>Repo-agnostic <strong>behavioral</strong> PR-verification engine. It builds, runs, and verifies a PR against a human-authored spec — running <em>parallel</em> to CodeRabbit, which only reads the diff.</p>
+  <div class="meta">
+    <span class="chip">branch: felix-pr-verification</span>
+    <span class="chip">phase: 1 · hand-run CLI</span>
+    <span class="chip">runtime: node · commonjs</span>
+    <span class="chip">2026-05-31</span>
+  </div>
+</header>
+
+<main>
+
+  <section>
+    <h2><span class="num">0</span> Where we are</h2>
+    <div class="body">
+      <p class="lead">The scaffold commit (<code>044cd96</code>) landed the project shell only. This plan covers the <strong>follow-up engine modules</strong> named in that commit: github client, spec loader, worktree sandbox, Tier&nbsp;1 checks, cross-family judge, verdict composer, orchestrator, and CLI.</p>
+      <div class="grid two">
+        <div class="card"><h4><span class="tag t-ok">done</span> Shell</h4><p><code>package.json</code>, <code>.env.example</code>, <code>felix.config.example.json</code>, <code>.gitignore</code>, <code>sql/felix-schema.sql</code></p></div>
+        <div class="card"><h4><span class="tag t-warn">to&nbsp;build</span> Engine</h4><p>Everything under <code>src/engine/</code>, the <code>bin/felix.js</code> CLI, and <code>test/</code>. No source exists yet.</p></div>
+      </div>
+      <div class="callout">Felix is <strong>complementary</strong> to CodeRabbit. CodeRabbit reasons over the text of the diff. Felix actually <strong>executes</strong> the PR head in a sandbox and asks: <em>does the running code satisfy what a human asked for?</em></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">1</span> What "verify" means</h2>
+    <div class="body">
+      <p>Felix produces one of four verdicts per PR (these are the exact values stored in <code>felix_verdicts.verdict</code>):</p>
+      <div class="grid two">
+        <div class="card"><h4><span class="tag t-ok">VERIFIED</span></h4><p>All <em>hard</em> Tier&nbsp;1 checks pass <strong>and</strong> the cross-family judge confirms every mapped acceptance criterion is met by the running code.</p></div>
+        <div class="card"><h4><span class="tag t-bad">NOT VERIFIED</span></h4><p>A hard check failed (build/tests red) <strong>or</strong> the judge finds one or more criteria unmet. Comes with a "Required to pass" list.</p></div>
+        <div class="card"><h4><span class="tag t-warn">INSUFFICIENT EVIDENCE</span></h4><p>No spec could be found, or install/build broke so behavior could not be exercised. Felix declines to bless or block.</p></div>
+        <div class="card"><h4><span class="tag t-skip">SKIPPED</span></h4><p>Only non-behavioral files changed (docs, lockfiles, images per <code>skipGlobs</code>). Nothing to run.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">2</span> Pipeline</h2>
+    <div class="body">
+      <div class="pipe">
+        <div class="step"><div class="ix">1</div><div class="txt"><b>Resolve PR</b><div>Fetch metadata, changed files, head/base SHA, and the unified diff via the GitHub client.</div></div></div>
+        <div class="step"><div class="ix">2</div><div class="txt"><b>Load config</b><div>Read <code>felix.config.json</code> from the <em>target</em> repo root (install/test/smoke commands, skipGlobs, timeouts). Fall back to the example for Node repos.</div></div></div>
+        <div class="step"><div class="ix">3</div><div class="txt"><b>Triage</b><div>If every changed path matches <code>skipGlobs</code> → <span class="tag t-skip">SKIPPED</span> early, no sandbox spun up.</div></div></div>
+        <div class="step"><div class="ix">4</div><div class="txt"><b>Load spec (Tier 2 mapping)</b><div>Extract acceptance criteria from the PR body and linked issues. Map each criterion to changed files / tests → <code>criteria_total</code>, <code>criteria_mapped</code>.</div></div></div>
+        <div class="step"><div class="ix">5</div><div class="txt"><b>Sandbox</b><div><code>git worktree add</code> the head SHA into <code>.felix-worktrees/&lt;pr&gt;</code> — isolated, disposable, no secrets injected.</div></div></div>
+        <div class="step"><div class="ix">6</div><div class="txt"><b>Tier 1 checks</b><div>install → build/smoke → full test run → targeted re-run of changed test files → secrets scan. Each emits <code>{name,tier,status,hard,detail}</code>.</div></div></div>
+        <div class="step"><div class="ix">7</div><div class="txt"><b>Tier 3 judge</b><div>Cross-family LLM (OpenAI) reads spec + diff + test/smoke output and rules each criterion met/unmet. <strong>Refuses to run with an Anthropic judge.</strong></div></div></div>
+        <div class="step"><div class="ix">8</div><div class="txt"><b>Compose verdict</b><div>Deterministic rules combine Tier 1 + Tier 3 into the final verdict and a "Required to pass" bullet list.</div></div></div>
+        <div class="step"><div class="ix">9</div><div class="txt"><b>Log + report</b><div>Write a <code>felix_verdicts</code> row (best-effort). Dry-run prints the comment; otherwise post/update an idempotent PR comment.</div></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">3</span> Module map</h2>
+    <div class="body">
+      <p class="lead">Layout under <code>felix/</code>. CommonJS throughout, matching the repo. Each module is small, single-purpose, and unit-testable in isolation.</p>
+      <pre><code>felix/
+├─ bin/felix.js              # CLI entry: parse args/flags → run orchestrator
+├─ src/engine/
+│  ├─ index.js               # orchestrator: the 9-step pipeline
+│  ├─ github.js              # PR + issue read, comment upsert (fetch + Bearer)
+│  ├─ config.js              # load/validate felix.config.json (+ example fallback)
+│  ├─ spec.js                # spec discovery + criteria parsing (Tier 2 mapping)
+│  ├─ sandbox.js             # git worktree create/teardown
+│  ├─ tier1.js               # install/build/smoke/test/secrets checks
+│  ├─ judge.js               # cross-family judge (OpenAI), family guard
+│  ├─ verdict.js             # combine tiers → verdict + required_to_pass
+│  ├─ comment.js             # render markdown report; idempotent marker
+│  ├─ log.js                 # Supabase felix_verdicts writer (best-effort)
+│  └─ util/
+│     ├─ exec.js             # spawn with timeout + captured stdout/stderr
+│     └─ logger.js           # consistent [FELIX] console prefixes
+├─ test/
+│  ├─ run.js                 # tiny runner (npm test → node test/run.js)
+│  └─ fixtures/              # sample PR payloads, configs, diffs
+├─ docs/felix-phase1-plan.html
+└─ (existing scaffold files)</code></pre>
+
+      <details>
+        <summary>github.js — PR + issue read, comment upsert</summary>
+        <div class="dc">
+          <ul>
+            <li>Plain <code>fetch</code> against <code>api.github.com</code> with <code>Authorization: Bearer ${GITHUB_TOKEN}</code> and a <code>User-Agent</code> — same shape as <code>sampulse/integrations/github.js</code>.</li>
+            <li><code>getPR(owner,repo,n)</code>, <code>getFiles()</code>, <code>getDiff()</code> (<code>Accept: application/vnd.github.v3.diff</code>), <code>getIssue()</code>.</li>
+            <li><code>upsertComment()</code> — finds an existing comment by a hidden marker (<code>&lt;!-- felix-verdict --&gt;</code>) and PATCHes it, else POSTs. Write only when <code>FELIX_POST_COMMENT=true</code> and not dry-run.</li>
+            <li>Handles 403 rate-limit + 404 gracefully (return null), mirroring existing helper.</li>
+          </ul>
+        </div>
+      </details>
+
+      <details>
+        <summary>spec.js — spec discovery &amp; Tier 2 mapping</summary>
+        <div class="dc">
+          <ul>
+            <li>Sources, in priority order: PR body "Acceptance Criteria" / checklist section → linked issues (<code>#123</code>, <code>Closes #</code>) bodies → PR title as a weak fallback.</li>
+            <li>Parse markdown checkboxes / bullet lines into discrete criteria strings → <code>criteria_total</code>.</li>
+            <li>Map each criterion to changed files/tests by keyword + path heuristics → <code>criteria_mapped</code>. Unmapped criteria flag possible missing coverage.</li>
+            <li>Records <code>spec_source</code> (e.g. <code>"GitHub issue #123"</code>) or null → drives INSUFFICIENT EVIDENCE.</li>
+          </ul>
+        </div>
+      </details>
+
+      <details>
+        <summary>sandbox.js — isolated worktree</summary>
+        <div class="dc">
+          <ul>
+            <li><code>git fetch</code> the PR head, then <code>git worktree add .felix-worktrees/&lt;repo&gt;-&lt;pr&gt; &lt;headSha&gt;</code>.</li>
+            <li>Disposable + git-ignored. <code>teardown()</code> runs <code>git worktree remove --force</code> in a <code>finally</code>.</li>
+            <li>No <code>.env</code> / secrets copied in. Commands run with a clean, minimal environment.</li>
+          </ul>
+        </div>
+      </details>
+
+      <details>
+        <summary>tier1.js — deterministic checks</summary>
+        <div class="dc">
+          <ul>
+            <li>Each step uses <code>util/exec</code> with the per-command timeout from config and captures combined output (truncated for the judge + comment).</li>
+            <li><b>install</b> (hard), <b>build/smoke</b> (hard if a smoke <code>expect</code> string is configured), <b>test</b> full run (hard), <b>testOne</b> on each changed test file (soft, for fast signal), <b>secrets</b> scan (hard) honoring <code>secrets.allowFiles</code>.</li>
+            <li>Emits the array stored verbatim in <code>tier1_results</code>.</li>
+          </ul>
+        </div>
+      </details>
+
+      <details>
+        <summary>judge.js — cross-family integrity</summary>
+        <div class="dc">
+          <div class="callout bad" style="margin-bottom:10px">Hard guard: if <code>FELIX_JUDGE_FAMILY</code> resolves to Anthropic (or the model id looks like Claude), Felix <strong>throws and refuses to run</strong>. The judge must be a different model family than the code generator to avoid self-grading.</div>
+          <ul>
+            <li>Phase 1 implements the <code>openai</code> family only (<code>FELIX_JUDGE_MODEL=gpt-4.1</code>).</li>
+            <li>Prompt = spec criteria + diff + Tier 1 outputs; structured JSON response <code>{assessment, criteria:[{text,met}]}</code> stored in <code>tier3</code>.</li>
+            <li>If <code>OPENAI_API_KEY</code> is missing → judge step is skipped and feeds INSUFFICIENT EVIDENCE rather than crashing.</li>
+          </ul>
+        </div>
+      </details>
+
+      <details>
+        <summary>verdict.js + comment.js + log.js</summary>
+        <div class="dc">
+          <ul>
+            <li><b>verdict.js</b>: pure function over (triage, tier1, tier3) → see decision table below. Builds <code>required_to_pass</code> from failed hard checks + unmet criteria.</li>
+            <li><b>comment.js</b>: renders a compact markdown report (verdict badge, criteria table, failing checks, "Required to pass") + the hidden idempotency marker.</li>
+            <li><b>log.js</b>: inserts one <code>felix_verdicts</code> row via <code>@supabase/supabase-js</code>; on missing env it <em>warns and continues</em> (per <code>.env.example</code>).</li>
+          </ul>
+        </div>
+      </details>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">4</span> Verdict decision table</h2>
+    <div class="body">
+      <table>
+        <thead><tr><th>Condition</th><th>Verdict</th></tr></thead>
+        <tbody>
+          <tr><td>Only <code>skipGlobs</code> paths changed</td><td><span class="tag t-skip">SKIPPED</span></td></tr>
+          <tr><td>No spec found <em>or</em> install/build failed (can't exercise behavior)</td><td><span class="tag t-warn">INSUFFICIENT EVIDENCE</span></td></tr>
+          <tr><td>Any <strong>hard</strong> Tier 1 check failed</td><td><span class="tag t-bad">NOT VERIFIED</span></td></tr>
+          <tr><td>Judge marks ≥1 mapped criterion unmet</td><td><span class="tag t-bad">NOT VERIFIED</span></td></tr>
+          <tr><td>All hard checks pass <em>and</em> all mapped criteria met</td><td><span class="tag t-ok">VERIFIED</span></td></tr>
+        </tbody>
+      </table>
+      <p class="mut" style="font-size:13px">Precedence top→bottom: the first matching row wins, so SKIPPED short-circuits before any sandbox cost, and INSUFFICIENT EVIDENCE is preferred over a false NOT VERIFIED when the system couldn't actually test.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">5</span> CLI surface</h2>
+    <div class="body">
+      <pre><code># dry-run a PR (default): compute + print, never comment
+node bin/felix.js Eatmorerats/sampulse#42
+
+# post/update the verdict comment on the PR
+node bin/felix.js Eatmorerats/sampulse#42 --post
+
+# point at a target repo checkout for config + sandbox
+node bin/felix.js owner/repo#7 --repo-path /path/to/clone</code></pre>
+      <p class="mut" style="font-size:13.5px">Flags resolve against env: <code>--post</code> ⇒ <code>FELIX_POST_COMMENT=true</code> + <code>FELIX_DRY_RUN=false</code>. Defaults stay safe (dry-run, no write) per <code>.env.example</code>.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">6</span> Build sequence (commits)</h2>
+    <div class="body">
+      <ol>
+        <li><b>util + config + github client</b> — <code>exec</code>, <code>logger</code>, config loader/validator, GitHub read/comment. Unit tests on fixtures.</li>
+        <li><b>spec loader + Tier 2 mapping</b> — criteria extraction + mapping, <code>spec_source</code>.</li>
+        <li><b>sandbox + Tier 1</b> — worktree lifecycle, the five checks, output truncation.</li>
+        <li><b>judge + verdict + comment</b> — cross-family guard, decision table, markdown render.</li>
+        <li><b>orchestrator + CLI + Supabase log</b> — wire the pipeline, arg parsing, best-effort logging.</li>
+        <li><b>tests + docs + apply schema</b> — end-to-end on a fixture PR; run <code>felix-schema.sql</code> via <code>config/run-schema.js</code>.</li>
+      </ol>
+      <p class="mut" style="font-size:13px">Each commit keeps <code>npm test</code> green and the engine importable, so review can happen incrementally.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">7</span> Risks &amp; decisions</h2>
+    <div class="body">
+      <div class="callout warn"><b>Untrusted PR code execution.</b> Tier 1 runs arbitrary install/test scripts. Phase 1 is hand-run by you on trusted repos only — no auto-trigger, no secrets in the sandbox, generous timeouts but hard kill. Stronger isolation (container/VM, network egress limits) is a later phase.</div>
+      <div class="callout"><b>Cross-family integrity.</b> The Anthropic-judge refusal is a load-bearing safety rule, not a config nicety — it prevents the generator family from grading its own output.</div>
+      <ul>
+        <li><b>Cost.</b> Judge runs one bounded LLM call per PR; diff + outputs are truncated to a token budget.</li>
+        <li><b>Idempotency.</b> Re-running on the same PR updates the single marked comment rather than spamming.</li>
+        <li><b>Private repo.</b> Pages/raw-HTML hosting isn't available, so docs like this are committed in-repo and delivered directly for mobile viewing.</li>
+        <li><b>Graceful degradation.</b> Missing Supabase or judge keys downgrade the verdict honestly (warn / INSUFFICIENT EVIDENCE) instead of crashing.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">8</span> Open questions for you</h2>
+    <div class="body">
+      <ol>
+        <li>Build <strong>all</strong> Phase 1 modules in one pass, or land them commit-by-commit (sequence above) for review between each?</li>
+        <li>First real target repo for the spec/config heuristics — is <strong>BSW Hub</strong> (the Node/TS example) the canonical one?</li>
+        <li>Confirm <code>gpt-4.1</code> via <code>OPENAI_API_KEY</code> as the Phase 1 judge, or a different non-Anthropic model?</li>
+        <li>Should Felix ever <em>block</em> (e.g. a failing status check) in a later phase, or stay comment-only?</li>
+      </ol>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  Felix Phase 1 implementation plan · generated for the <code>claude/felix-pr-verification</code> branch · 2026-05-31.<br>
+  Self-contained HTML — no network needed. Lives at <code>felix/docs/felix-phase1-plan.html</code> in the repo.
+</footer>
+</body>
+</html>
