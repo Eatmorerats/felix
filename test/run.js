@@ -3116,6 +3116,57 @@ test('an already-loaded module still resolves while armed (cache hit, no fresh w
   }
 });
 
+atest('a createClient that THROWS degrades the store — it must not take the run down', async () => {
+  // The hole this closes cost a real CI run. supabase-js builds a RealtimeClient inside
+  // createClient, which on Node < 22 throws "Node.js 20 detected without native WebSocket
+  // support" — and every caller in log.js builds its client OUTSIDE its try/catch, so the throw
+  // escaped all four and Felix exited 3 at step 5 with a spec loaded and nothing graded.
+  //
+  // Driven through fresh module instances rather than a new seam: preloadOptional() memoises, so
+  // the only honest way to inject a different @supabase/supabase-js is to re-require the pair.
+  const supaId = require.resolve('@supabase/supabase-js');
+  const preloadId = require.resolve('../src/engine/preload');
+  const logId = require.resolve('../src/engine/log');
+  const saved = { supa: require.cache[supaId], preload: require.cache[preloadId], log: require.cache[logId] };
+  try {
+    delete require.cache[preloadId];
+    delete require.cache[logId];
+    require.cache[supaId] = {
+      id: supaId, filename: supaId, loaded: true, exports: {
+        createClient() { throw new Error('Node.js 20 detected without native WebSocket support.'); },
+      },
+    };
+    const freshLog = require('../src/engine/log');
+    const env = { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'service-key' };
+
+    // The verdict log skips rather than throwing — the stated invariant.
+    assert.deepStrictEqual(await freshLog.logVerdict({ repo: 'r/x', pr_number: 1 }, env), { logged: false });
+
+    // And the freeze/cap read reports the store as UNAVAILABLE, which is the shape index.js
+    // already reasons about: advisory mode warns, GATING MODE REFUSES. Degrading here is not a
+    // bypass — it fails closed where closing matters instead of killing the whole run.
+    const prior = await freshLog.fetchPriorRuns({ repo: 'r/x', prNumber: 1 }, env);
+    assert.strictEqual(prior.available, false);
+    assert.strictEqual(prior.judgeAttempts, 0);
+    assert.strictEqual(prior.baselineFingerprint, null);
+
+    assert.deepStrictEqual(await freshLog.recordOutcome({ repo: 'r/x', prNumber: 1, outcome: 'clean' }, env), { updated: 0 });
+  } finally {
+    if (saved.supa) require.cache[supaId] = saved.supa; else delete require.cache[supaId];
+    if (saved.preload) require.cache[preloadId] = saved.preload; else delete require.cache[preloadId];
+    if (saved.log) require.cache[logId] = saved.log; else delete require.cache[logId];
+  }
+});
+
+test('the action does not default to a Node that cannot construct a Supabase client', () => {
+  // Pinned because the default is what every adopting repo silently inherits. Node 20 is also
+  // deprecated on GitHub runners.
+  const actionYml = fs.readFileSync(path.join(__dirname, '..', 'action.yml'), 'utf8');
+  const m = /node-version:[\s\S]*?default:\s*'(\d+)'/.exec(actionYml);
+  assert.ok(m, 'action.yml must declare a node-version default');
+  assert.ok(Number(m[1]) >= 22, `action.yml defaults to Node ${m[1]}; supabase-js needs >= 22`);
+});
+
 test('preloadOptional caches createClient so log.js needs no late require (F5)', () => {
   const p = preloadOptional();
   assert.strictEqual(

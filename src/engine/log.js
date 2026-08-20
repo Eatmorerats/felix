@@ -24,7 +24,23 @@ function client(env = process.env) {
     logger.warn('@supabase/supabase-js is not installed — skipping the verdict log.');
     return null;
   }
-  return createClient(url, key);
+  // createClient CAN THROW, and every caller below builds its client OUTSIDE its try/catch — so
+  // for a while this function was the one hole in "logging must never block a verdict". It cost a
+  // real run: supabase-js constructs a RealtimeClient inside createClient, which on Node < 22
+  // throws "Node.js 20 detected without native WebSocket support", and Felix died at exit 3 with a
+  // spec already loaded and nothing graded. Felix never opens a realtime socket — it only speaks
+  // PostgREST — so the crash was pure collateral from a constructor we do not use.
+  //
+  // Returning null routes the failure into the path that ALREADY reasons about an unreachable
+  // store: the verdict log skips, and fetchPriorRuns reports `available:false`, which advisory mode
+  // warns about and GATING MODE REFUSES. So this is not a bypass — it fails closed exactly where
+  // closing matters, instead of taking the whole run down where it does not.
+  try {
+    return createClient(url, key);
+  } catch (e) {
+    logger.warn(`Supabase client could not be constructed — continuing without the store: ${e.message}`);
+    return null;
+  }
 }
 
 async function logVerdict(row, env = process.env) {

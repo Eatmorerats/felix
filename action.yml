@@ -53,9 +53,15 @@ inputs:
     required: false
     default: 'true'
   node-version:
-    description: 'Node version used to run Felix itself.'
+    description: >-
+      Node version used to run Felix itself. Must be 22 or newer: @supabase/supabase-js builds a
+      RealtimeClient inside createClient, and on Node < 22 that throws "Node.js 20 detected without
+      native WebSocket support" the moment Felix reaches the verdict store. Felix never opens a
+      realtime socket — it only speaks PostgREST — but the constructor does not know that, so the
+      crash lands at step 5 with a spec already loaded and grades nothing (exit 3). Node 20 is also
+      deprecated on GitHub runners. Only lower this if you run WITHOUT Supabase configured.
     required: false
-    default: '20'
+    default: '22'
 
 runs:
   using: 'composite'
