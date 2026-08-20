@@ -1,6 +1,6 @@
 {
   "name": "felix",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Felix — repo-agnostic behavioral PR-verification engine. Builds, runs, and verifies PRs against a human-authored spec. Usable in any repo as a composite GitHub Action.",
   "main": "src/engine/index.js",
   "bin": {
